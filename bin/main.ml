@@ -76,15 +76,14 @@ let open_session ?sink ?parent_session ~cwd (provider : Op.Config.provider)
       Fmt.epr "warning: session log disabled: %s\n%!" e;
       None
 
-let log_event session (provider : Op.Config.provider) model :
-    Op.Agent.event -> unit =
+let log_event log (provider : Op.Config.provider) model : Op.Agent.event -> unit
+    =
   let api = Op.Config.string_of_api provider.api in
-  fun event ->
-    match (session, event) with
-    | Some s, Op.Agent.Assistant_turn turn ->
-        Op.Session.append_assistant s ~api ~provider:provider.name ~model turn
-    | Some s, Tool_finished tr -> Op.Session.append_tool_result s tr
-    | _, _ -> ()
+  function
+  | Op.Agent.Assistant_turn turn ->
+      Op.Session.append_assistant log ~api ~provider:provider.name ~model turn
+  | Tool_finished tr -> Op.Session.append_tool_result log tr
+  | Tool_ids_repaired -> ()
 
 let resolve_prompt ~(fail : string -> 'a) ~resuming ~prompt_file ~prompt =
   let file =
@@ -231,8 +230,8 @@ let report_result ~(mode : Cli.output) ~session ~base ~window ~model
 
 (* Per-event sink: session logging, plus the one warning the session lines
    cannot carry (repaired tool-call ids) on stderr. *)
-let build_emit ~session ~provider ~model =
-  let log = log_event session provider model in
+let build_emit ~log ~provider ~model =
+  let log = log_event log provider model in
   fun event ->
     (match event with
     | Op.Agent.Tool_ids_repaired ->
@@ -336,15 +335,23 @@ let run_with_context ~env ~mode ~cwd ~config ~provider ~api_key ~model ~tls
   let extra_metadata =
     Op.Run_summary.branch_correction_metadata branch_correction
   in
-  let emit = build_emit ~session ~provider ~model in
+  (* The entries are produced whether or not they can be saved: a run whose
+     log could not be opened still prints its transcript. [session] stays the
+     saved one, which is what the envelope and the resume hint may name. *)
+  let log =
+    match session with
+    | Some s -> s
+    | None ->
+        Op.Session.unsaved ?sink:(stream_sink mode) ?parent_session ~cwd
+          ~provider:provider.Op.Config.name ~model ()
+  in
+  let emit = build_emit ~log ~provider ~model in
   let tools, nu_gate = build_tools ~env ~profile ~tool_names ~depth in
   let call =
     setup_call ~env ~tls ~provider ~api_key ~model ~max_tokens ~tools
   in
   let gate = Op.Gate.v ?nu:nu_gate ~cwd () in
-  Option.iter
-    (fun s -> Op.Session.append_user s ~blocks:image_blocks ~text:prompt ())
-    session;
+  Op.Session.append_user log ~blocks:image_blocks ~text:prompt ();
   (* The prompt reflects the tools actually built (nu may have been dropped). *)
   let tool_names = List.map (fun (t : Op.Tool.t) -> t.name) tools in
   let messages =

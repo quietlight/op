@@ -43,6 +43,20 @@ val v :
     file's lines. A sink that raises would abort the run, so callers pass a
     total function. *)
 
+val unsaved :
+  ?sink:(Yojson.Safe.t -> unit) ->
+  ?parent_session:string ->
+  cwd:string ->
+  provider:string ->
+  model:string ->
+  unit ->
+  t
+(** [unsaved ?sink ?parent_session ~cwd ~provider ~model ()] is a session with
+    no file behind it, for a run whose log could not be opened. Entries are
+    built, linked and passed to [sink] exactly as {!v}'s are, so the transcript
+    and [--stream] still read live; nothing is written and the session cannot be
+    resumed. Its {!path} and {!id} are [""]. *)
+
 val path : t -> string
 (** [path t] Return the session file path. *)
 

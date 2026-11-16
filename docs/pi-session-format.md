@@ -178,7 +178,9 @@ in this document changes with the flag.
   failure is the tagged error envelope,
   `{"type":"result","error":…,"isError":true}`. Exit codes match `--json`.
 - If session logging is impossible (e.g. `HOME` unset), op warns on stderr and
-  the stream degrades to the result line alone — streaming never blocks a run.
+  still streams every entry line, but nothing is saved: the result line
+  carries no `sessionId` and the header's `id` names no file, so the run cannot
+  be resumed.
 
 ## Gate judge logs (retired)
 

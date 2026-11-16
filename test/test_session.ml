@@ -170,6 +170,27 @@ let test_session_parent_session_header () =
     "absent when not given" true
     (member "parentSession" plain = `Null)
 
+(* A run whose log cannot be opened still produces its entries: the sink sees
+   the same header-then-linked-entries shape a saved session writes. *)
+let test_session_unsaved_still_emits () =
+  let seen = ref [] in
+  let session =
+    Op.Session.unsaved
+      ~sink:(fun j -> seen := j :: !seen)
+      ~cwd:"/tmp/proj" ~provider:"anthropic" ~model:"claude-x" ()
+  in
+  Op.Session.append_user session ~text:"hello" ();
+  Op.Session.close session;
+  let lines = List.rev !seen in
+  Alcotest.(check (list string))
+    "header, then the entries in order"
+    [ "session"; "model_change"; "thinking_level_change"; "message" ]
+    (List.map (str "type") lines);
+  let last = List.nth lines 3 and before = List.nth lines 2 in
+  Alcotest.(check string)
+    "entries are linked" (str "id" before) (str "parentId" last);
+  Alcotest.(check string) "no file behind it" "" (Op.Session.path session)
+
 let test_session_dir_encoding () =
   Alcotest.(check string)
     "pi cwd encoding" "/root/--Users-x-my-proj--"
@@ -244,6 +265,7 @@ let suite =
       ("message shapes", `Quick, test_session_message_shapes);
       ("session file is private", `Quick, test_session_file_is_private);
       ("parentSession header field", `Quick, test_session_parent_session_header);
+      ("unsaved session still emits", `Quick, test_session_unsaved_still_emits);
       ("dir encoding", `Quick, test_session_dir_encoding);
       ("resume unknown leaf", `Quick, test_session_resume_unknown_leaf);
       ("sink mirrors the file", `Quick, test_session_sink_mirrors_file);
