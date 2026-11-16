@@ -19,6 +19,7 @@ type opts = {
   parent_id : string option;
   from_session : string option;
   handoff : bool;
+  render : bool;
   model_spec : string option;
   prompt_file : string option;
   max_steps : int option;
@@ -31,7 +32,7 @@ type opts = {
   prompt : string option;
 }
 
-let v set_kind list_kind limit session_id parent_id from_session handoff
+let v set_kind list_kind limit session_id parent_id from_session handoff render
     model_spec prompt_file max_steps tools profile json stream images context
     prompt =
   {
@@ -42,6 +43,7 @@ let v set_kind list_kind limit session_id parent_id from_session handoff
     parent_id;
     from_session;
     handoff;
+    render;
     model_spec;
     prompt_file;
     max_steps;
@@ -149,6 +151,18 @@ let list_arg =
     "List sessions, messages, branches, models, or default (KIND), then exit"
   in
   Arg.(value & opt (some (enum kinds)) None & info [ "list" ] ~doc ~docv:"KIND")
+
+let render_arg =
+  let doc =
+    "Render a session as the human transcript instead of running a prompt, \
+     then exit. The source is $(b,--sessionId) $(i,ID) (a session of this \
+     directory), else the positional argument taken as a session $(i,FILE), \
+     else stdin. Stdin may be a session file or the output of $(b,op \
+     --stream), whose closing result line becomes the run footer: $(b,op \
+     --stream) $(i,PROMPT) | $(b,op --render) prints what a plain $(b,op) \
+     $(i,PROMPT) would."
+  in
+  Arg.(value & flag & info [ "render" ] ~doc)
 
 let set_arg =
   let doc =
@@ -331,6 +345,7 @@ type command =
       session_id : string option;
       stray_prompt : bool;
     }
+  | Render of { session_id : string option; file : string option }
   | Handoff of {
       mode : output;
       session_id : string;
@@ -353,6 +368,10 @@ let command (opts : opts) =
       usage_error "--json and --stream are mutually exclusive"
   | _ when opts.session_id <> None && opts.from_session <> None ->
       usage_error "--fromSession and --sessionId are mutually exclusive"
+  | _ when opts.render && (opts.json || opts.stream || opts.handoff) ->
+      usage_error
+        "--render prints the human transcript; it cannot be combined with \
+         --json, --stream or --handoff"
   | _, _, true, None -> usage_error "--handoff requires --sessionId"
   | _, _, true, _ when opts.stream ->
       usage_error "--handoff and --stream are mutually exclusive"
@@ -368,6 +387,8 @@ let command (opts : opts) =
              session_id = opts.session_id;
              stray_prompt = Option.is_some opts.prompt;
            })
+  | None, None, _, _ when opts.render ->
+      Ok (Render { session_id = opts.session_id; file = opts.prompt })
   | None, None, true, Some session_id ->
       Ok
         (Handoff
@@ -402,7 +423,7 @@ let command_term =
     term_result ~usage:true
       (const command
       $ (const v $ set_arg $ list_arg $ limit_arg $ session_id_arg
-       $ parent_id_arg $ from_session_arg $ handoff_arg $ model_arg
+       $ parent_id_arg $ from_session_arg $ handoff_arg $ render_arg $ model_arg
        $ prompt_file_arg $ max_steps_arg $ tools_arg $ profile_arg $ json_arg
        $ stream_arg $ image_arg $ context_arg $ prompt_arg)))
 
@@ -423,8 +444,10 @@ let man =
        $(i,PROMPT) argument, else from stdin.";
     `P
       "Every run is appended to a resumable session log under \
-       $(b,~/.op_global/sessions/). On exit op prints a ready-to-paste resume \
-       command on stderr.";
+       $(b,~/.op_global/sessions/). The transcript ends with a ready-to-paste \
+       resume command ($(b,--json) prints it on stderr; $(b,--stream) carries \
+       the ids in its result line). $(b,--render) replays a session as the \
+       same transcript.";
     `S "SESSIONS";
     `P
       "A session is a tree: each prompt, reply and tool result is an entry \

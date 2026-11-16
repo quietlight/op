@@ -20,7 +20,7 @@
 # Tab is inert and everything else works.
 #
 # Turns render live from `op --stream`, so there is no transcript command:
-# to re-read an old session, run `pi-session-view (session file)` directly.
+# to re-read an old session, run `op --render --sessionId <id>` directly.
 #
 # The module is shaped like an Elm program — model, msg, update, view — with
 # the one concession an interactive shell forces: update runs its effects (op
@@ -30,11 +30,9 @@
 # whole behaviour, and everything above them is the view and the effects they
 # lean on. New commands slot in as a `parse-line` arm plus an `update` arm.
 
-use pi-session-view.nu
-
 # ── view ─────────────────────────────────────────────────────────────────────
 # Everything hop prints on its own behalf. op's turns are not rendered here:
-# they stream through pi-session-view inside send-op.
+# they stream through `op --render` inside send-op.
 
 def dim [text: string] { print $"(ansi dark_gray)($text)(ansi reset)" }
 
@@ -107,44 +105,36 @@ def show-result [res] {
 # update. The one licence: interactive pickers render their own chrome — the
 # instruction line above an `input list` is part of the picker, not a verdict.
 
-# hop just watched the user type this turn, so the session's own echo of it is
-# noise in the live view.
-def user-echo [e: record] {
-    ($e | get -o type) == "message" and (($e | get -o message | get -o role) == "user")
+# What the live view leaves out of the stream it hands to `op --render`: the
+# user's own message (hop just watched them type it) and the closing result
+# line (hop prints its own footer from it, in show-result).
+def off-screen [line: string]: nothing -> bool {
+    let e = try { $line | from json } catch { null }
+    if $e == null { return false }
+    let type = $e | get -o type
+    $type == "result" or ($type == "message" and (($e | get -o message | get -o role) == "user"))
 }
 
-# Run op --stream, rendering each session entry as it is appended, and return
-# the run's final result record. The streamed lines are exactly the session
-# file's, so pi-session-view's renderer serves them unchanged — the only
-# difference from rendering a finished file is when they arrive. A hard crash
-# that produces no result line (op normally emits an error envelope even on
-# exit 1) becomes an error record of the same shape instead of throwing
-# mid-chat.
-#
-# A fold rather than an `each` because the renderer needs one piece of memory:
-# a toolResult names its call by id, so naming the file a read result took means
-# carrying the calls seen so far. `main`'s file path gets that from a prepass;
-# a live stream has no lookahead, so it accumulates here.
+# Run op --stream and return the run's final result record, rendering the turn
+# as it happens. The streamed lines are exactly the session file's, so a second
+# op — `op --render`, reading them on stdin — prints the same transcript a
+# plain `op` run would: `tee` hands it a copy of the stream while this pipeline
+# keeps the original to find the result line in. One renderer, op's own, for
+# both the direct and the hop view. A hard crash that produces no result line
+# (op normally emits an error envelope even on exit 1) becomes an error record
+# of the same shape instead of throwing mid-chat.
 def send-op [args: list<string>] {
-    let final = (
+    let results = (
         ^op --stream ...$args
+        | tee { lines | where {|l| not (off-screen $l) } | to text | ^op --render }
         | lines
-        | reduce --fold {calls: {}, result: null} {|l, st|
-            let e = try { $l | from json } catch { null }
-            if $e == null {
-                $st
-            } else if ($e | get -o type) == "result" {
-                $st | merge {result: $e}
-            } else {
-                if not (user-echo $e) { pi-session-view render-entry $e $st.calls }
-                $st | merge {calls: ($st.calls | merge (pi-session-view calls-of $e))}
-            }
-        }
+        | each {|l| try { $l | from json } catch { null } }
+        | where {|e| ($e | describe | str starts-with "record") and ($e | get -o type) == "result" }
     )
-    if $final.result == null {
+    if ($results | is-empty) {
         {isError: true, error: "op produced no result line"}
     } else {
-        $final.result
+        $results | last
     }
 }
 

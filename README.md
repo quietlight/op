@@ -139,6 +139,8 @@ op --tools read,glob "…"       # pick a tool subset, or `none`
 op --json "…"                  # result envelope only
 op --stream "…"                # session ndjson, then the envelope
 op --max-steps 3 "…"           # cap the number of tool-using turns
+op --render --sessionId ID     # replay a session as the transcript
+op --stream "…" | op --render  # the same transcript, rendered from the stream
 ```
 
 The transcript shows each assistant turn, each tool call with its arguments,
@@ -253,7 +255,7 @@ any run that uses the `nu` tool.
 
 [nu_modules/hop.nu](nu_modules/hop.nu) is an interactive front end written in
 Nushell. It threads each run's session id into the next call, renders turns
-live from `--stream`, offers `@file` context completion, and drives the
+live by piping `--stream` into `op --render`, offers `@file` context completion, and drives the
 handoff flow from an editor. op stays a one-shot primitive; hop is where the
 back-and-forth lives.
 

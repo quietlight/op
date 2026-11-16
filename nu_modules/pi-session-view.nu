@@ -8,26 +8,28 @@
 # The session format is documented in op's docs/pi-session-format.md.
 # Each line of the file is a JSON object; the first is the "session" header
 # and the rest are entries. This module renders the header, model changes,
-# and message entries (user / assistant / toolResult). Entry types it does not know how to render
-# are silently skipped, and missing optional fields are tolerated so a
-# partial/crashed log still displays.
+# and message entries (user / assistant / toolResult). Entry types it does
+# not know how to render are silently skipped, and missing optional fields are
+# tolerated so a partial/crashed log still displays.
 #
-# THIS IS THE NU TWIN OF op's `lib/render.ml`, and the two are meant to print
-# the same transcript for the same entries: op renders its own runs (its
-# default stdout), this renders a finished file and hop's live `op --stream`.
-# The constants below are `render.ml`'s line budgets, the per-tool call and
-# result lines are its `call_lines`/`result_summary`, and the layout — a blank
-# line before each USER/ASSISTANT header and nowhere else, `→`/`←` heads with
-# the tool name in a five-wide column, bodies indented four — is its `head`.
-# When one side changes, change the other; `test/expect/expect_render.ml` is
-# the shared fixture set, and its expectations are what this must reproduce.
-# The one deliberate divergence is `todo`: op dropped the tool, so render.ml
-# shows old todo entries through its generic unknown-tool path, but this twin
-# keeps the checklist renderer — legacy op sessions and pi sessions (pi's
-# todo.ts) still carry list state in todo toolResult `details`, and that is
-# what this module is for.
+# KEPT AS AN EXAMPLE. Nothing in op calls this module any more: `op --render`
+# replays a session file (or a piped `op --stream`) through op's own renderer,
+# `lib/render.ml`, and hop uses that. This file stays because it is good
+# Nushell to read and to borrow from — it was the strongest entry in a
+# which-model-writes-the-best-nu comparison — and because it still works on
+# its own for any op or pi session log.
+#
+# It was written as the twin of `lib/render.ml`: the constants below are that
+# module's line budgets and the layout is its `head` (a blank line before each
+# USER/ASSISTANT header and nowhere else, `→`/`←` heads with the tool name in a
+# five-wide column, bodies indented four). It is no longer kept in step, so
+# expect it to drift from op's transcript as render.ml changes. One difference
+# was always deliberate: this module keeps a checklist renderer for `todo`
+# entries (legacy op sessions and pi's todo.ts carry list state in the
+# toolResult `details`), where render.ml shows them through its generic
+# unknown-tool path.
 
-# --- limits (lib/render.ml's, verbatim) ------------------------------------
+# --- limits (lib/render.ml's, as of 2026-11) ------------------------------------
 
 const PREVIEW_LINES = 5
 const NU_PREVIEW_LINES = 10

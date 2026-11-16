@@ -175,8 +175,7 @@ let%expect_test "preview boundary at exactly the budget" =
         …  6 lines total
     |}]
 
-(* Two degradations that keep the nu twin (nu_modules/pi-session-view.nu)
-   honest: glob's default root is not worth a column, and a result whose call
+(* Two degradations: glob's default root is not worth a column, and a result whose call
    was never seen has no path to name. *)
 let%expect_test "a glob rooted at the cwd, and a result with no call" =
   let t = renderer () in
@@ -357,6 +356,34 @@ let%expect_test "thinking blocks are shown, capped" =
       step 4
       …  7 lines of thinking
     Here is the answer.
+    |}]
+
+(* [op --render] folds [Render.line] over a session file or a piped --stream:
+   entries go through [entry], the stream's closing result line through
+   [footer], and anything that is not JSON renders nothing. *)
+let%expect_test "line: entries, the result line, and noise" =
+  let t = Render.v ~color:false ~cwd:"/work" ~echo_user:true () in
+  List.iter
+    (fun text -> show (Render.line t text))
+    [
+      {|{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}|};
+      "";
+      "warning: not json";
+      {|{"type":"message","message":{"role":"assistant","model":"m-1","usage":{"output":3},"content":[{"type":"text","text":"kia ora"}]}}|};
+      {|{"type":"result","answer":"kia ora","sessionId":"s1","parentId":"p1","stopReason":"finished","turns":1,"toolCalls":0,"tokens":{"input":10,"output":3}}|};
+    ];
+  [%expect
+    {|
+    ### USER
+    hello
+
+    ### ASSISTANT [m-1]  out=3 tok
+    kia ora
+
+    ────────────────────────────────────────────────────────
+    finished  ·  1 turn  ·  0 tool calls
+    tokens: 10 in, 3 out
+    resume: op --sessionId s1 --parentId p1 "prompt"
     |}]
 
 let%expect_test "footer: a finished run, with and without a context window" =

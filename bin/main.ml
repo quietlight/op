@@ -149,14 +149,17 @@ let build_messages ~cwd ~prompt ~image_blocks ~prior_history ~tool_names =
   :: prior_history
   @ [ Op.Llm.user ~blocks:image_blocks prompt ]
 
-(* [resume] is a stderr trailer for the machine modes, whose stdout is JSON a
-   human is not reading. The human transcript already ends with the same line in
-   its footer, so repeating it here would just print it twice. *)
+(* [resume] is a stderr trailer for [--json], whose stdout is one JSON object a
+   human is not reading. The human transcript already ends with the same line
+   in its footer. [--stream] has no use for it either: its result line carries
+   the ids, its reader is a program, and when that program renders the stream
+   (hop, through [op --render]) a stderr line lands in the middle of the
+   transcript. *)
 let close_session ~(mode : Cli.output) session =
   Option.iter
     (fun s ->
       match (mode, Op.Session.leaf s) with
-      | Cli.Human, _ -> ()
+      | (Cli.Human | Cli.Stream), _ -> ()
       | _, Some leaf ->
           Fmt.epr "resume: op --sessionId %s --parentId %s \"prompt\"\n%!"
             (Op.Session.id s) leaf
@@ -545,6 +548,39 @@ let handoff_cmd ~env ~(mode : Cli.output) ~session_id ~parent_id ~model_spec
       run_handoff ~env ~json:(mode = Cli.Json) ~cwd ~provider ~api_key ~model
         ~tls ~session_id ~parent_id ~goal
 
+(* --render: replay a session through the transcript renderer. The source is a
+   session of this directory, a file, or stdin (a file's lines, or a live
+   --stream). Printed and flushed line by line, so a piped stream reads live.
+   User messages are echoed: unlike a run, nobody just typed them here. *)
+let render_cmd ~session_id ~file =
+  let fail msg = fail_with Cli.Human msg in
+  let cwd = try Some (Sys.getcwd ()) with Sys_error _ -> None in
+  let path =
+    match (session_id, file) with
+    | Some _, Some _ -> fail "--render takes --sessionId or a FILE, not both"
+    | Some session_id, None -> (
+        match
+          Op.Session_resume.path_of
+            ~cwd:(Option.value cwd ~default:".")
+            ~session_id
+        with
+        | Ok path -> Some path
+        | Error e -> fail e)
+    | None, file -> file
+  in
+  let t = Op.Render.v ~color:(use_color ()) ?cwd ~echo_user:true () in
+  let replay ic =
+    In_channel.fold_lines
+      (fun () text ->
+        List.iter print_endline (Op.Render.line t text);
+        flush stdout)
+      () ic
+  in
+  match path with
+  | None -> replay In_channel.stdin
+  | Some path -> (
+      try In_channel.with_open_bin path replay with Sys_error msg -> fail msg)
+
 let with_eio f =
   Eio_main.run @@ fun env ->
   Mirage_crypto_rng_unix.use_default ();
@@ -557,6 +593,7 @@ let run : Cli.command -> unit = function
         "--list does not accept a PROMPT argument"
   | List { kind; json; limit; session_id; stray_prompt = false } ->
       List_cmd.run_list ~json ~limit ~session_id kind
+  | Render { session_id; file } -> render_cmd ~session_id ~file
   | Handoff { mode; session_id; parent_id; model_spec; prompt_file; prompt } ->
       with_eio @@ fun env ->
       handoff_cmd ~env ~mode ~session_id ~parent_id ~model_spec ~prompt_file

@@ -5,14 +5,11 @@
     the renderer is side-effect-free and expect-testable; [bin/main.ml] decides
     which channel they land on and when to flush.
 
-    [nu_modules/pi-session-view.nu] is this module's twin: same layout, same
-    line budgets, same per-tool lines, but for a finished session file and for
-    hop's live [--stream]. The two are expected to print the {e same} transcript
-    for the same entries — change one, change the other, and check it by
-    rendering a session file both ways. The one deliberate divergence is [todo]:
-    the twin keeps a checklist renderer for legacy op sessions and pi sessions
-    (whose [todo] toolResult [details] carry the list state), while this module
-    renders those entries through the generic unknown-tool path.
+    This is the only renderer op maintains. [op --render] replays a finished
+    session file, or a [--stream] piped in, through it, which is what [hop] does
+    for its live view. [nu_modules/pi-session-view.nu] is an earlier Nushell
+    renderer of the same layout, kept as an example of well-written nu and not
+    kept in step with this module.
 
     The machine views are unaffected: [--stream] still emits the session's
     ndjson byte-identically (that is what [hop] reads) and [--json] still emits
@@ -48,3 +45,9 @@ val footer : t -> Yojson.Safe.t -> string list
     an error envelope, the message and its hint. Taking the same value the
     machine modes serialise is what keeps the two from disagreeing about what a
     run reported. *)
+
+val line : t -> string -> string list
+(** [line t text] renders one line of a session file, or of [op --stream]: a
+    session entry through {!entry}, the stream's closing result envelope (the
+    line tagged ["type":"result"]) through {!footer}. A blank or non-JSON line
+    renders nothing. This is what [op --render] folds over its input. *)

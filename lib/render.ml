@@ -5,12 +5,10 @@
     the renderer is expect-testable and the caller decides which channel they
     land on.
 
-    [nu_modules/pi-session-view.nu] is this module's twin — same transcript, for
-    a finished session file and for hop's live [--stream]. Keep them in step:
-    its constants are the line budgets below, and its layout is [head]'s. The
-    one deliberate divergence is [todo]: the twin keeps a checklist renderer for
-    legacy op sessions and pi sessions, while this module renders those entries
-    through the generic unknown-tool path.
+    This is the one renderer: a run's own stdout, a replayed session file and
+    hop's live view all come through it (the last two via [op --render]).
+    [nu_modules/pi-session-view.nu] is an earlier Nushell renderer of the same
+    layout, kept as example nu and not kept in step.
 
     Stateful only because a [toolResult] entry names its call by id and nothing
     else: to say which file a [read] result came from, the renderer has to
@@ -156,8 +154,8 @@ let edit_summary t args =
     (rel t (str_or "path" ~default:"?" args))
     (snippet "old_string") (snippet "new_string") all
 
-(* The fallback for a tool this renderer does not know: pi-session-view's
-   [k=v, k=v] summary, so a new tool degrades to something readable instead of
+(* The fallback for a tool this renderer does not know: a [k=v, k=v]
+   summary, so a new tool degrades to something readable instead of
    nothing. *)
 let generic_summary args =
   match args with
@@ -486,3 +484,12 @@ let footer t env =
   | None ->
       ("" :: rule t :: outcome_line t env :: tokens_line t env)
       @ context_line t env @ resume_line t env
+
+(* One line of a session file or of [--stream]: an entry, or the stream's
+   closing result envelope. Blank and non-JSON lines render nothing, so a
+   truncated log or a stray diagnostic does not stop a replay. *)
+let line t text =
+  match Yojson.Safe.from_string text with
+  | exception Yojson.Json_error _ -> []
+  | json when str "type" json = Some "result" -> footer t json
+  | json -> entry t json
