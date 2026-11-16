@@ -18,7 +18,7 @@ let error ?hint msg =
     (`Assoc
        ([ ("error", `String msg) ] @ hint_field @ [ ("isError", `Bool true) ]))
 
-let sessions (xs : Session_read.summary list) =
+let sessions (xs : Session_list.summary list) =
   to_line
     (`Assoc
        [
@@ -26,7 +26,7 @@ let sessions (xs : Session_read.summary list) =
          ( "sessions",
            `List
              (List.map
-                (fun (s : Session_read.summary) ->
+                (fun (s : Session_list.summary) ->
                   `Assoc
                     [
                       ("id", `String s.id);
@@ -37,7 +37,7 @@ let sessions (xs : Session_read.summary list) =
                 xs) );
        ])
 
-let messages ~session_id (xs : Session_read.entry_summary list) =
+let messages ~session_id (xs : Session_list.entry_summary list) =
   to_line
     (`Assoc
        [
@@ -46,7 +46,7 @@ let messages ~session_id (xs : Session_read.entry_summary list) =
          ( "messages",
            `List
              (List.map
-                (fun (e : Session_read.entry_summary) ->
+                (fun (e : Session_list.entry_summary) ->
                   let parent_id =
                     match e.parent_id with Some p -> `String p | None -> `Null
                   in
@@ -61,7 +61,7 @@ let messages ~session_id (xs : Session_read.entry_summary list) =
                 xs) );
        ])
 
-let branches ~session_id (xs : Session_read.branch_tip list) =
+let branches ~session_id (xs : Session_list.branch_tip list) =
   to_line
     (`Assoc
        [
@@ -70,7 +70,7 @@ let branches ~session_id (xs : Session_read.branch_tip list) =
          ( "branches",
            `List
              (List.map
-                (fun (b : Session_read.branch_tip) ->
+                (fun (b : Session_list.branch_tip) ->
                   `Assoc
                     [
                       ("tip", `String b.tip);

@@ -3,6 +3,21 @@ open Test_support
 (* Reader tests for Op.Session_read. Sessions are built with the Op.Session
    writer, then read back and summarised through Op.Session_read. *)
 
+(* The readers work on a tree parsed once; these tests mostly ask one question
+   of one file, so load-then-ask is wrapped up here. *)
+let read_messages ~path ?leaf () =
+  Result.bind (Op.Session_read.load path) (fun t ->
+      Op.Session_read.messages t ?leaf ())
+
+let read_branch_point ~path ~leaf =
+  Result.bind (Op.Session_read.load path) (fun t ->
+      Op.Session_read.resolve_branch_point t ~leaf)
+
+let leaf_ids ~path =
+  match Op.Session_read.load path with
+  | Ok t -> Op.Session_read.leaf_ids t
+  | Error _ -> []
+
 let turn ?(text = "") ?(thinking = None) ?(usage = None) tool_calls :
     Op.Llm.assistant_turn =
   { text; thinking; tool_calls; usage }
@@ -115,7 +130,7 @@ let write_two_tool_session dir =
   (path, first_tool_result_id, second_tool_use_id)
 
 let load_messages path ?leaf () =
-  match Op.Session_read.load_messages ~path ?leaf () with
+  match read_messages ~path ?leaf () with
   | Ok ms -> ms
   | Error e -> Alcotest.fail e
 
@@ -255,7 +270,7 @@ let test_session_load_leaf () =
 let test_session_load_unknown_leaf () =
   with_temp_dir @@ fun dir ->
   let path = write_sample_session dir in
-  match Op.Session_read.load_messages ~path ~leaf:"deadbeef" () with
+  match read_messages ~path ~leaf:"deadbeef" () with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected an error for an unknown leaf id"
 
@@ -286,7 +301,7 @@ let write_cyclic_session dir =
 let test_session_parent_cycle_errors () =
   with_temp_dir @@ fun dir ->
   let path = write_cyclic_session dir in
-  match Op.Session_read.load_messages ~path ~leaf:"aaa" () with
+  match read_messages ~path ~leaf:"aaa" () with
   | Error e when contains e "cycle" -> ()
   | Error e -> Alcotest.failf "expected a cycle error, got %S" e
   | Ok ms ->
@@ -295,12 +310,12 @@ let test_session_parent_cycle_errors () =
 let test_branch_point_parent_cycle_errors () =
   with_temp_dir @@ fun dir ->
   let path = write_cyclic_session dir in
-  match Op.Session_read.resolve_branch_point ~path ~leaf:"aaa" with
+  match read_branch_point ~path ~leaf:"aaa" with
   | Error e -> Alcotest.(check bool) "names the cycle" true (contains e "cycle")
   | Ok (id, _) -> Alcotest.failf "expected a cycle error, resolved to %s" id
 
 let resolve_branch_point path leaf =
-  match Op.Session_read.resolve_branch_point ~path ~leaf with
+  match read_branch_point ~path ~leaf with
   | Ok resolved -> resolved
   | Error e -> Alcotest.fail e
 
@@ -349,7 +364,7 @@ let test_resolve_branch_point_sample () =
   | id, adjusted ->
       Alcotest.(check string) "user stays put" user id;
       Alcotest.(check bool) "user not adjusted" false adjusted);
-  match Op.Session_read.resolve_branch_point ~path ~leaf:"deadbeef" with
+  match read_branch_point ~path ~leaf:"deadbeef" with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected an error for an unknown branch point"
 
@@ -441,7 +456,7 @@ let test_resolve_branch_point_interrupted_mid_call () =
      new forked assistant). *)
   Alcotest.(check int)
     "two leaves after mid-call fork" 2
-    (List.length (Op.Session_read.leaf_ids ~path))
+    (List.length (leaf_ids ~path))
 
 let test_session_resume_and_fork () =
   with_temp_dir @@ fun dir ->
@@ -505,7 +520,7 @@ let test_leaf_ids () =
   with_temp_dir @@ fun dir ->
   let path = write_sample_session dir in
   (* A linear session has exactly one leaf: its last tree entry. *)
-  (match Op.Session_read.leaf_ids ~path with
+  (match leaf_ids ~path with
   | [ id ] ->
       let entries =
         read_jsonl path
@@ -530,20 +545,20 @@ let test_leaf_ids () =
   Op.Session.close forked;
   Alcotest.(check int)
     "two leaves after forking" 2
-    (List.length (Op.Session_read.leaf_ids ~path))
+    (List.length (leaf_ids ~path))
 
 let test_list_sessions () =
   with_temp_dir @@ fun dir ->
   let _path1 = write_sample_session dir in
   let _path2 = write_sample_session dir in
   let sessions =
-    match Op.Session_read.list_sessions ~dir () with
+    match Op.Session_list.list_sessions ~dir () with
     | Ok s -> s
     | Error e -> Alcotest.fail e
   in
   Alcotest.(check int) "two sessions" 2 (List.length sessions);
   (* Ascending order by filename = chronological *)
-  let ids = List.map (fun (s : Op.Session_read.summary) -> s.id) sessions in
+  let ids = List.map (fun (s : Op.Session_list.summary) -> s.id) sessions in
   Alcotest.(check bool) "ascending ids" true (ids = List.sort compare ids);
   (* Summary is first sentence of first user message *)
   (match sessions with
@@ -554,7 +569,7 @@ let test_list_sessions () =
       Alcotest.(check int) "count1" 4 s1.count
   | _ -> Alcotest.fail "expected exactly two sessions");
   (* the lib returns every session, oldest first; the caller applies --limit *)
-  match Op.Session_read.list_sessions ~dir () with
+  match Op.Session_list.list_sessions ~dir () with
   | Ok (_ :: _ as l) ->
       Alcotest.(check int) "all sessions returned" 2 (List.length l)
   | Ok [] -> Alcotest.fail "expected sessions"
@@ -564,14 +579,14 @@ let test_list_entries () =
   with_temp_dir @@ fun dir ->
   let path = write_sample_session dir in
   let entries =
-    match Op.Session_read.list_entries ~path () with
+    match Op.Session_list.list_entries ~path () with
     | Ok e -> e
     | Error e -> Alcotest.fail e
   in
   (* Only user/assistant, no toolResult *)
   Alcotest.(check int) "user+assistant only" 3 (List.length entries);
   let roles =
-    List.map (fun (e : Op.Session_read.entry_summary) -> e.role) entries
+    List.map (fun (e : Op.Session_list.entry_summary) -> e.role) entries
   in
   Alcotest.(check (list string))
     "roles"
@@ -599,7 +614,7 @@ let test_list_entries () =
       Alcotest.(check bool) "a2 parent not a1" true (a2.parent_id <> Some a1.id)
   | _ -> Alcotest.fail "expected 3 entries");
   (* the lib returns every user/assistant entry; the caller applies --limit *)
-  match Op.Session_read.list_entries ~path () with
+  match Op.Session_list.list_entries ~path () with
   | Ok [ _; e1; e2 ] ->
       Alcotest.(check string) "second-last role" "assistant" e1.role;
       Alcotest.(check string) "last role" "assistant" e2.role
@@ -636,13 +651,13 @@ let test_tool_preview_and_fork () =
     (turn ~text:"other branch" []);
   Op.Session.close forked;
   let entries =
-    match Op.Session_read.list_entries ~path () with
+    match Op.Session_list.list_entries ~path () with
     | Ok e -> e
     | Error e -> Alcotest.fail e
   in
   let tool_turn =
     List.find
-      (fun (e : Op.Session_read.entry_summary) -> contains e.preview "edit")
+      (fun (e : Op.Session_list.entry_summary) -> contains e.preview "edit")
       entries
   in
   Alcotest.(check bool)
@@ -653,7 +668,7 @@ let test_tool_preview_and_fork () =
     (contains tool_turn.preview "lib/x.ml");
   let user_entry =
     List.find
-      (fun (e : Op.Session_read.entry_summary) -> e.id = user_id)
+      (fun (e : Op.Session_list.entry_summary) -> e.id = user_id)
       entries
   in
   Alcotest.(check bool) "user entry is a fork" true user_entry.is_fork
@@ -695,7 +710,7 @@ let test_session_image_preview_elides () =
   Op.Session.append_user session ~blocks:[ img ] ~text:"" ();
   let path = Op.Session.path session in
   Op.Session.close session;
-  match Op.Session_read.list_entries ~path () with
+  match Op.Session_list.list_entries ~path () with
   | Ok [ e ] ->
       Alcotest.(check bool)
         "placeholder shown" true
@@ -733,11 +748,11 @@ let test_list_branches () =
     };
   let path = Op.Session.path session in
   Op.Session.close session;
-  (match Op.Session_read.list_branches ~path () with
+  (match Op.Session_list.list_branches ~path () with
   | Ok [ tip ] ->
       Alcotest.(check string)
         "linear session's tip is its leaf"
-        (List.hd (Op.Session_read.leaf_ids ~path))
+        (List.hd (leaf_ids ~path))
         tip.tip;
       Alcotest.(check string)
         "tool-result tip described by its assistant" "assistant" tip.role;
@@ -752,16 +767,15 @@ let test_list_branches () =
   Op.Session.append_assistant forked ~api:"a" ~provider:"a" ~model:"m"
     (turn ~text:"other branch" []);
   Op.Session.close forked;
-  match Op.Session_read.list_branches ~path () with
+  match Op.Session_list.list_branches ~path () with
   | Ok tips ->
       Alcotest.(check (list string))
-        "one tip per branch, file order"
-        (Op.Session_read.leaf_ids ~path)
-        (List.map (fun (t : Op.Session_read.branch_tip) -> t.tip) tips);
+        "one tip per branch, file order" (leaf_ids ~path)
+        (List.map (fun (t : Op.Session_list.branch_tip) -> t.tip) tips);
       Alcotest.(check (list string))
         "each described"
         [ "working"; "other branch" ]
-        (List.map (fun (t : Op.Session_read.branch_tip) -> t.preview) tips)
+        (List.map (fun (t : Op.Session_list.branch_tip) -> t.preview) tips)
   | Error e -> Alcotest.fail e
 
 (* --context boilerplate must not be what a listing shows: a project that always
@@ -790,12 +804,12 @@ let test_context_stripped_from_listings () =
          ~prompt:"and now the tests");
   let path = Op.Session.path session in
   Op.Session.close session;
-  (match Op.Session_read.list_sessions ~dir () with
+  (match Op.Session_list.list_sessions ~dir () with
   | Ok [ s ] ->
       Alcotest.(check string)
         "summary is the prompt" "audit the wav parser" s.summary
   | _ -> Alcotest.fail "expected one session summary");
-  match Op.Session_read.list_entries ~path () with
+  match Op.Session_list.list_entries ~path () with
   | Ok [ first; _; second ] ->
       Alcotest.(check string)
         "first user preview" "audit the wav parser" first.preview;

@@ -338,7 +338,8 @@ let close t = Option.iter close_out t.oc
    append mode and seed the id set so fresh ids stay unique. *)
 let resume ?(sink = ignore) ~path ~leaf () =
   let ( let* ) = Result.bind in
-  let* ids = Session_read.entry_ids path in
+  let* tree = Session_read.load path in
+  let ids = Session_read.entry_ids tree in
   if not (List.mem leaf ids) then err_leaf_not_found leaf
   else
     try

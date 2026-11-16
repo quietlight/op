@@ -163,3 +163,9 @@ let rec merge_adjacent = function
       merge_adjacent ((k1, c1 @ c2) :: rest)
   | x :: rest -> x :: merge_adjacent rest
   | [] -> []
+
+(* Coarse human-readable size, e.g. "312 KB". *)
+let human_bytes n =
+  if n < 1024 then Fmt.str "%d B" n
+  else if n < 1024 * 1024 then Fmt.str "%d KB" (n / 1024)
+  else Fmt.str "%d MB" (n / (1024 * 1024))

@@ -13,14 +13,14 @@ val error : ?hint:string -> string -> string
 (** [error ?hint msg] is the failure envelope [{"error":msg,"isError":true}],
     with an optional human hint. *)
 
-val sessions : Session_read.summary list -> string
+val sessions : Session_list.summary list -> string
 (** [sessions xs] renders the [sessions] envelope; [xs] may be empty. *)
 
-val messages : session_id:string -> Session_read.entry_summary list -> string
+val messages : session_id:string -> Session_list.entry_summary list -> string
 (** [messages ~session_id xs] renders the [messages] envelope for one session;
     [xs] may be empty. *)
 
-val branches : session_id:string -> Session_read.branch_tip list -> string
+val branches : session_id:string -> Session_list.branch_tip list -> string
 (** [branches ~session_id xs] renders the [branches] envelope for one session,
     one [{tip,role,preview,when}] per branch tip. [when] is the tip entry's
     timestamp; [tip] is the id to pass as [--parentId]. *)

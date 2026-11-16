@@ -58,3 +58,7 @@ val next_call_id : unit -> string
 val merge_adjacent : ('a * 'b list) list -> ('a * 'b list) list
 (** [merge_adjacent pairs] folds consecutive [(key, list)] pairs that share a
     key into one, concatenating their lists and preserving order. *)
+
+val human_bytes : int -> string
+(** [human_bytes n] is a coarse human-readable size for [n] bytes: ["512 B"],
+    ["312 KB"], ["4 MB"]. *)

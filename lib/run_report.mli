@@ -17,7 +17,7 @@ val sum_usage : ?base:int -> Llm.message list -> Llm.usage option
     report the true prompt volume rather than just the uncached [input]. [base]
     (default [0]) skips that many leading messages: a resumed run passes the
     length of the replayed history so the report covers only this run's turns,
-    which {!Session_read.load_messages} would otherwise double-count now that it
+    which {!Session_read.messages} would otherwise double-count now that it
     restores the recorded usage. *)
 
 val context_tokens : Llm.usage -> int

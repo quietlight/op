@@ -50,15 +50,18 @@ let parse_entries path =
 
 let is_header e = U.member "type" e = `String "session"
 
-(* Tree entries only: the header carries an id (the session id, not a valid
-   parentId target) but no parent link, so it is dropped here. *)
-let tree_entries path =
-  let* entries = parse_entries path in
-  Ok (List.filter (fun e -> not (is_header e)) entries)
+(* A parsed session file. [entries] are the tree entries in file order: the
+   header is held apart because it carries an id (the session id, not a valid
+   parentId target) and no parent link. [by_id] follows parentId links in O(1). *)
+type tree = {
+  header : Yojson.Safe.t option;
+  entries : Yojson.Safe.t list;
+  by_id : (string, Yojson.Safe.t) Hashtbl.t;
+}
 
-(* Index entries by their id so parentId links can be followed in O(1). Shared
-   by [load_messages] and [resolve_branch_point], which both walk the tree. *)
-let index_by_id entries =
+let load path =
+  let* all = parse_entries path in
+  let entries = List.filter (fun e -> not (is_header e)) all in
   let by_id = Hashtbl.create 64 in
   List.iter
     (fun e ->
@@ -66,11 +69,15 @@ let index_by_id entries =
       | `String id -> Hashtbl.replace by_id id e
       | _ -> ())
     entries;
-  by_id
+  Ok { header = List.find_opt is_header all; entries; by_id }
+
+let header t = t.header
+let entries t = t.entries
+let entry t id = Hashtbl.find_opt t.by_id id
 
 (* Concatenate the "text" fields of content blocks of type "text". pi also
    allows user content to be a plain string. Image blocks contribute no text. *)
-let concat_text = function
+let text_of_content = function
   | `String s -> s
   | content ->
       U.to_list content
@@ -79,13 +86,6 @@ let concat_text = function
           | `String "text" -> Some (U.to_string (U.member "text" block))
           | _ -> None)
       |> String.concat ""
-
-(* Human-readable size for an image placeholder, e.g. "312 KB". [n] is the
-   base64 byte count; the decoded size is ~3/4 of that. *)
-let human_bytes n =
-  if n < 1024 then Fmt.str "%d B" n
-  else if n < 1024 * 1024 then Fmt.str "%d KB" (n / 1024)
-  else Fmt.str "%d MB" (n / (1024 * 1024))
 
 (* Parse a pi content list into neutral [content_block]s, preserving order.
    A plain-string content becomes a single [Text]. Image blocks carry the pi
@@ -132,54 +132,6 @@ let user_of_content content =
   in
   Llm.User { text; blocks = attachments }
 
-(* Preview text for [op --list messages]: like [concat_text] but images are
-   shown as an elided placeholder ([image image/png 312 KB]) rather than
-   dropped or dumped as base64. *)
-let preview_text = function
-  | `String s -> s
-  | content ->
-      U.to_list content
-      |> List.filter_map (fun block ->
-          match U.member "type" block with
-          | `String "text" -> Some (U.to_string (U.member "text" block))
-          | `String "image" ->
-              let media_type =
-                match U.member "mimeType" block with
-                | `String s -> s
-                | _ -> "image"
-              in
-              let size =
-                match U.member "data" block with
-                | `String s -> human_bytes (String.length s)
-                | _ -> "?"
-              in
-              Fmt.kstr (fun s -> Some s) "[image %s %s]" media_type size
-          | _ -> None)
-      |> String.concat " "
-
-(* [--context FILE] prepends a `<context file="…">…</context>` block per file to
-   the user's first message (see context.ml). That is op's boilerplate, not what
-   the user typed, and in a project that always passes the same CLAUDE.md it
-   makes every session's summary read [<context file=CLAUDE…] — identical rows
-   where the listing exists to tell sessions apart. So skip the leading blocks
-   and describe the prompt underneath. Unterminated or non-leading blocks are
-   left alone: this only trims what op is known to have prepended. *)
-let strip_context_blocks text =
-  let close = "</context>" in
-  let n = String.length close in
-  let rec strip s =
-    let s = String.trim s in
-    if not (String.starts_with ~prefix:"<context file=" s) then s
-    else
-      match Util.substring ~start:0 ~needle:close s with
-      | None -> s
-      | Some i -> strip (String.sub s (i + n) (String.length s - i - n))
-  in
-  (* A message that is *only* context still has to say something. *)
-  match strip text with
-  | "" -> text
-  | stripped -> stripped
-
 (* Read an assistant message's [usage] back. op's writer always emits the
    object, zeroed when the provider reported nothing, so an all-zero reading is
    "no usage" rather than "a free turn" — reporting it as [None] keeps the
@@ -219,7 +171,7 @@ let message_of_json msg =
   | `String "user" -> Ok (Some (user_of_content (U.member "content" msg)))
   | `String "assistant" ->
       let content = U.member "content" msg in
-      let text = concat_text content in
+      let text = text_of_content content in
       let thinking = thinking_of_content content in
       let tool_calls =
         U.to_list content
@@ -251,7 +203,7 @@ let message_of_json msg =
               {
                 id = U.to_string (U.member "toolCallId" msg);
                 name = U.to_string (U.member "toolName" msg);
-                content = concat_text (U.member "content" msg);
+                content = text_of_content (U.member "content" msg);
                 is_error = U.to_bool (U.member "isError" msg);
                 (* Read tool-specific metadata back verbatim for pi-format
                    parity and compatibility with foreign and historical logs. *)
@@ -289,21 +241,17 @@ let rec walk_parents by_id ~fuel entry acc =
         | None -> err_parent_not_found pid)
     | _ -> Ok acc
 
-let load_messages ~path ?leaf () =
-  let* entries = tree_entries path in
-  let by_id = index_by_id entries in
+let messages t ?leaf () =
   let* start =
     match leaf with
     | Some id -> (
-        match Hashtbl.find_opt by_id id with
-        | Some e -> Ok e
-        | None -> err_leaf_not_found id)
+        match entry t id with Some e -> Ok e | None -> err_leaf_not_found id)
     | None -> (
-        match List.rev entries with
+        match List.rev t.entries with
         | last :: _ -> Ok last
         | [] -> Error "session has no entries")
   in
-  walk_parents by_id ~fuel:(List.length entries) start []
+  walk_parents t.by_id ~fuel:(List.length t.entries) start []
 
 let is_incomplete_branch_point entry =
   match U.member "type" entry with
@@ -320,40 +268,33 @@ let is_incomplete_branch_point entry =
       | _ -> false)
   | _ -> false
 
-let resolve_branch_point ~path ~leaf =
-  let* entries = tree_entries path in
-  let by_id = index_by_id entries in
+let resolve_branch_point t ~leaf =
   (* Same cycle bound as {!walk_parents}: this walk also follows parentId and
      would spin on a corrupt chain. *)
   let rec walk ~fuel id =
     if fuel <= 0 then err_parent_cycle ()
     else
-      match Hashtbl.find_opt by_id id with
+      match entry t id with
       | None -> err_leaf_not_found id
       | Some entry when not (is_incomplete_branch_point entry) ->
           Ok (id, id <> leaf)
       | Some entry -> (
           match U.member "parentId" entry with
-          | `String pid when Hashtbl.mem by_id pid -> walk ~fuel:(fuel - 1) pid
+          | `String pid when Hashtbl.mem t.by_id pid ->
+              walk ~fuel:(fuel - 1) pid
           | `String pid -> err_parent_not_found pid
           | _ -> Ok (id, id <> leaf))
   in
-  walk ~fuel:(List.length entries) leaf
+  walk ~fuel:(List.length t.entries) leaf
 
 (* --- resuming ------------------------------------------------------------ *)
 
-(* Every tree-entry id in the file (header excluded by type), so the writer can
-   check a requested leaf exists and seed its id-uniqueness set on resume. *)
-let entry_ids path =
-  let* entries = parse_entries path in
-  Ok
-    (List.filter_map
-       (fun e ->
-         match (U.member "type" e, U.member "id" e) with
-         | `String "session", _ -> None
-         | _, `String id -> Some id
-         | _ -> None)
-       entries)
+(* Every tree-entry id, so the writer can check a requested leaf exists and
+   seed its id-uniqueness set on resume. *)
+let entry_ids t =
+  List.filter_map
+    (fun e -> match U.member "id" e with `String id -> Some id | _ -> None)
+    t.entries
 
 let file_for_session ~dir ~session_id =
   let suffix = "_" ^ session_id ^ ".jsonl" in
@@ -368,239 +309,16 @@ let file_for_session ~dir ~session_id =
   | f :: _ -> Ok (Filename.concat dir f)
   | [] -> err_session_not_found ~session_id ~dir
 
-(* The leaf entries of the tree: tree entries that are no other entry's parent.
-   A linear session has exactly one leaf (its tail); a forked session has one
-   per branch tip, so continuing without a --parentId is ambiguous. Returned in
-   file (write) order; the session header is excluded by type. A malformed or
-   unreadable file yields the empty list (the caller then reports "no entries to
-   resume"). *)
-let leaf_ids ~path =
-  match parse_entries path with
-  | Error _ -> []
-  | Ok entries ->
-      let parents = Hashtbl.create 64 in
-      List.iter
-        (fun e ->
-          match U.member "parentId" e with
-          | `String pid -> Hashtbl.replace parents pid ()
-          | _ -> ())
-        entries;
-      List.filter_map
-        (fun e ->
-          match (U.member "type" e, U.member "id" e) with
-          | `String "session", _ -> None
-          | _, `String id when not (Hashtbl.mem parents id) -> Some id
-          | _ -> None)
-        entries
-
-(* --- listing ------------------------------------------------------------- *)
-
-type summary = {
-  id : string;
-  timestamp : string;
-  summary : string;
-  count : int;
-}
-
-(* Whichever comes first: a session row is one line of a table, so a newline has
-   to end it even when a sentence carries on past one (a URL's dot used to win,
-   printing the line break into the listing). *)
-let first_sentence s =
-  let cut_at =
-    match (String.index_opt s '.', String.index_opt s '\n') with
-    | Some i, Some j -> Some (min i j)
-    | Some i, None -> Some i
-    | None, j -> j
-  in
-  match cut_at with Some i -> String.sub s 0 i | None -> s
-
-let jsonl_files dir =
-  try
-    Sys.readdir dir |> Array.to_list
-    |> List.filter (fun f -> Filename.check_suffix f ".jsonl")
-    |> List.sort compare
-  with Sys_error _ -> []
-
-let is_user_message e =
-  U.member "type" e = `String "message"
-  && U.member "role" (U.member "message" e) = `String "user"
-
-let first_user_summary entries =
-  match List.find_opt is_user_message entries with
-  | Some e ->
-      let text =
-        strip_context_blocks
-          (concat_text (U.member "content" (U.member "message" e)))
-      in
-      Util.truncate ~max_bytes:80 (first_sentence text)
-  | None -> ""
-
-(* Number of conversational message entries (user/assistant/toolResult) — a
-   rough size signal so similar-looking sessions can be told apart. *)
-let message_count entries =
-  List.fold_left
-    (fun n e -> if U.member "type" e = `String "message" then n + 1 else n)
-    0 entries
-
-let summary_of_file path =
-  let* entries = parse_entries path in
-  match entries with
-  | header :: _ ->
-      let id = U.to_string (U.member "id" header) in
-      let timestamp = U.to_string (U.member "timestamp" header) in
-      Ok
-        {
-          id;
-          timestamp;
-          summary = first_user_summary entries;
-          count = message_count entries;
-        }
-  | [] -> Error "empty file"
-
-let list_sessions ~dir () =
-  let oks =
-    jsonl_files dir
-    |> List.filter_map (fun f ->
-        match summary_of_file (Filename.concat dir f) with
-        | Ok s -> Some s
-        | Error _ -> None)
-  in
-  Ok oks
-
-type entry_summary = {
-  id : string;
-  parent_id : string option;
-  role : string;
-  preview : string;
-  is_fork : bool;
-}
-
-(* Summarise an assistant turn's tool calls, used as the preview when the turn
-   carried no text (a tool-only turn). e.g. "→ edit lib/session.ml, nu ls". *)
-let tool_calls_hint content =
-  match content with
-  | `List blocks -> (
-      let hint block =
-        match U.member "type" block with
-        | `String "toolCall" ->
-            let name =
-              match U.member "name" block with `String s -> s | _ -> "?"
-            in
-            let detail =
-              List.find_map
-                (fun field ->
-                  match U.member field (U.member "arguments" block) with
-                  | `String s -> Some s
-                  | _ -> None)
-                [ "path"; "file_path"; "command"; "pattern" ]
-            in
-            Some
-              (match detail with
-              | Some d -> Fmt.str "%s %s" name d
-              | None -> name)
-        | _ -> None
-      in
-      match List.filter_map hint blocks with
-      | [] -> ""
-      | hints -> Util.truncate ~max_bytes:80 ("→ " ^ String.concat ", " hints))
-  | _ -> ""
-
-(* Count children per entry id (across all entry types) so an entry with more
-   than one child can be flagged as a fork point. *)
-let child_counts entries =
-  let tbl = Hashtbl.create 64 in
+(* The leaf entries of the tree: entries that are no other entry's parent. A
+   linear session has exactly one leaf (its tail); a forked session has one per
+   branch tip, so continuing without a --parentId is ambiguous. Returned in
+   file (write) order. *)
+let leaf_ids t =
+  let parents = Hashtbl.create 64 in
   List.iter
     (fun e ->
       match U.member "parentId" e with
-      | `String pid ->
-          Hashtbl.replace tbl pid
-            (1 + Option.value ~default:0 (Hashtbl.find_opt tbl pid))
+      | `String pid -> Hashtbl.replace parents pid ()
       | _ -> ())
-    entries;
-  tbl
-
-(* The [(role, preview)] pair a listing shows for a conversational entry;
-   [None] for tool results and metadata entries, which have nothing to show. *)
-let role_and_preview entry =
-  match U.member "type" entry with
-  | `String "message" -> (
-      let msg = U.member "message" entry in
-      match U.member "role" msg with
-      | `String (("user" | "assistant") as role) ->
-          let content = U.member "content" msg in
-          let text = strip_context_blocks (preview_text content) in
-          let preview =
-            if String.trim text <> "" then Util.truncate ~max_bytes:80 text
-            else tool_calls_hint content
-          in
-          Some (role, preview)
-      | _ -> None)
-  | _ -> None
-
-(* A user/assistant entry as an [entry_summary]; [None] for other entries. *)
-let entry_summary_of children entry =
-  match role_and_preview entry with
-  | None -> None
-  | Some (role, preview) ->
-      let id = match U.member "id" entry with `String s -> s | _ -> "" in
-      let parent_id =
-        match U.member "parentId" entry with `String s -> Some s | _ -> None
-      in
-      let is_fork =
-        Option.value ~default:0 (Hashtbl.find_opt children id) > 1
-      in
-      Some { id; parent_id; role; preview; is_fork }
-
-let list_entries ~path () =
-  let* entries = parse_entries path in
-  let children = child_counts entries in
-  Ok (List.filter_map (entry_summary_of children) entries)
-
-type branch_tip = {
-  tip : string;
-  role : string;
-  preview : string;
-  timestamp : string;
-}
-
-(* A tip is whatever entry the branch ends on — routinely a tool result or a
-   metadata entry, which carry no text of their own. Walk [parentId]-ward to
-   the nearest conversational entry so the tip is described by something a
-   human recognises; [index_by_id] makes each hop O(1), and the entry count
-   bounds the walk so a corrupt parent cycle cannot spin. *)
-let describe_tip by_id ~fuel id =
-  let rec walk fuel id =
-    if fuel <= 0 then None
-    else
-      match Hashtbl.find_opt by_id id with
-      | None -> None
-      | Some entry -> (
-          match role_and_preview entry with
-          | Some _ as found -> found
-          | None -> (
-              match U.member "parentId" entry with
-              | `String pid -> walk (fuel - 1) pid
-              | _ -> None))
-  in
-  walk fuel id
-
-let list_branches ~path () =
-  let* entries = parse_entries path in
-  let by_id = index_by_id entries in
-  let fuel = List.length entries in
-  let children = child_counts entries in
-  let is_leaf id = not (Hashtbl.mem children id) in
-  Ok
-    (List.filter_map
-       (fun entry ->
-         match (is_header entry, U.member "id" entry) with
-         | false, `String id when is_leaf id ->
-             let role, preview =
-               Option.value (describe_tip by_id ~fuel id) ~default:("", "")
-             in
-             let timestamp =
-               match U.member "timestamp" entry with `String s -> s | _ -> ""
-             in
-             Some { tip = id; role; preview; timestamp }
-         | _ -> None)
-       entries)
+    t.entries;
+  List.filter (fun id -> not (Hashtbl.mem parents id)) (entry_ids t)

@@ -6,10 +6,10 @@ open Op
    serialised string — the same in-process style as expect_agent_loop.ml. *)
 
 let session ~id ~timestamp ~summary ~count =
-  { Session_read.id; timestamp; summary; count }
+  { Session_list.id; timestamp; summary; count }
 
 let entry ~id ~parent_id ~role ~preview ~is_fork =
-  { Session_read.id; parent_id; role; preview; is_fork }
+  { Session_list.id; parent_id; role; preview; is_fork }
 
 let%expect_test "error envelope" =
   print_endline (List_report.error "boom");

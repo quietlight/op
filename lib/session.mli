@@ -112,6 +112,6 @@ val resume :
     unique), check that [leaf] is one of them (Error otherwise), open the file
     in append mode, and set the current leaf to [leaf]. The next append becomes
     a child of [leaf]; if [leaf] already has children this forks the tree.
-    Reading the file back into messages is {!Session_read.load_messages}. [sink]
-    tees the appended lines as in {!v} — a resumed session has no header to
-    re-emit, so a stream consumer sees only the new entries. *)
+    Reading the file back into messages is {!Session_read.messages}. [sink] tees
+    the appended lines as in {!v} — a resumed session has no header to re-emit,
+    so a stream consumer sees only the new entries. *)

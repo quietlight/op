@@ -71,7 +71,7 @@ let list_sessions ~json limit =
   let result =
     let* root = Op.Session.default_root () in
     let dir = Op.Session.dir_for ~root ~cwd in
-    Op.Session_read.list_sessions ~dir ()
+    Op.Session_list.list_sessions ~dir ()
   in
   match result with
   | Error e -> list_fail ~json e
@@ -86,7 +86,7 @@ let list_sessions ~json limit =
             Fmt.pr "%-36s  %-11s  %4s  %s\n" "SESSION ID" "WHEN" "MSGS"
               "SUMMARY";
           List.iter
-            (fun (s : Op.Session_read.summary) ->
+            (fun (s : Op.Session_list.summary) ->
               Fmt.pr "%-36s  %-11s  %4d  %s\n" s.id (human_time s.timestamp)
                 s.count s.summary)
             sessions;
@@ -103,7 +103,7 @@ let list_messages ~json session limit =
     let* root = Op.Session.default_root () in
     let dir = Op.Session.dir_for ~root ~cwd in
     let* path = Op.Session_read.file_for_session ~dir ~session_id:session in
-    Op.Session_read.list_entries ~path ()
+    Op.Session_list.list_entries ~path ()
   in
   match result with
   | Error e -> list_fail ~json e
@@ -116,7 +116,7 @@ let list_messages ~json session limit =
           let tty = Unix.isatty Unix.stdout in
           if tty then Fmt.pr "%-2s %-8s %-9s  %s\n" "" "ENTRY" "ROLE" "MESSAGE";
           List.iter
-            (fun (e : Op.Session_read.entry_summary) ->
+            (fun (e : Op.Session_list.entry_summary) ->
               let mark = if e.is_fork then "*" else " " in
               Fmt.pr "%-2s %-8s %-9s  %s\n" mark e.id e.role e.preview)
             entries;
@@ -137,7 +137,7 @@ let list_branches ~json session limit =
     let* root = Op.Session.default_root () in
     let dir = Op.Session.dir_for ~root ~cwd in
     let* path = Op.Session_read.file_for_session ~dir ~session_id:session in
-    Op.Session_read.list_branches ~path ()
+    Op.Session_list.list_branches ~path ()
   in
   match result with
   | Error e -> list_fail ~json e
@@ -150,7 +150,7 @@ let list_branches ~json session limit =
           let tty = Unix.isatty Unix.stdout in
           if tty then Fmt.pr "%-8s %-11s %-9s  %s\n" "TIP" "WHEN" "ROLE" "TAIL";
           List.iter
-            (fun (b : Op.Session_read.branch_tip) ->
+            (fun (b : Op.Session_list.branch_tip) ->
               Fmt.pr "%-8s %-11s %-9s  %s\n" b.tip (human_time b.timestamp)
                 b.role b.preview)
             branches;
