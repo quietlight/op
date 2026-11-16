@@ -109,9 +109,8 @@ let block_text content =
    the project it is in rather than as a column of $HOME.
 
    The separator is a literal "/", not [Filename.dir_sep], matching how
-   [Glob.walk] builds its paths (see WINDOWS_COMPAT.md §"good existing
-   practice"): session entries carry the paths the tools saw, so this behaves
-   the same whatever the host OS thinks a separator is. *)
+   [Glob.walk] builds its paths: session entries carry the paths the tools
+   saw, so this behaves the same whatever the host OS thinks a separator is. *)
 let rel t path =
   match t.cwd with
   | Some cwd when cwd <> "" && String.starts_with ~prefix:(cwd ^ "/") path ->
