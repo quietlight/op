@@ -389,31 +389,11 @@ let model_change t e =
          (str_or "modelId" ~default:"?" e));
   ]
 
-(* The gate log's verdict footer. op never writes [custom] entries to a session,
-   but the gate log is the same format and this renderer serves it too. *)
-let custom t e =
-  if str "customType" e <> Some "gate_verdict" then []
-  else
-    let d = mem "data" e in
-    let verdict = str_or "verdict" ~default:"?" d in
-    let color =
-      match verdict with "allow" -> green | "warn" -> yellow | _ -> red
-    in
-    let reason =
-      match str "reason" d with Some r when r <> "" -> ": " ^ r | _ -> ""
-    in
-    [
-      color t
-        (Fmt.str "[gate → %s%s — routed: %s]" verdict reason
-           (str_or "routedBecause" ~default:"?" d));
-    ]
-
 let entry t json =
   match str "type" json with
   | Some "session" -> session_header t json
   | Some "model_change" -> model_change t json
   | Some "message" -> message t (mem "message" json)
-  | Some "custom" -> custom t json
   | _ -> []
 
 (* --- the run's tail ------------------------------------------------------- *)

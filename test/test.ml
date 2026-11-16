@@ -14,8 +14,6 @@ let () =
       Test_agent.suite;
       Test_gate.suite;
       Test_gate_nu.suite;
-      Test_gate_judge.suite;
-      Test_gate_log.suite;
       Test_session.suite;
       Test_session_read.suite;
       Test_openai_adapter.suite;

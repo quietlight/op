@@ -33,13 +33,13 @@ val v : color:bool -> ?cwd:string -> ?echo_user:bool -> unit -> t
     when replaying a finished session. *)
 
 val entry : t -> Yojson.Safe.t -> string list
-(** [entry t json] renders one session-log entry — [session], [model_change],
-    [message] (user / assistant / toolResult) or the gate log's [custom]
-    [gate_verdict]. Unknown entry types and unknown tools degrade rather than
-    fail: an unrecognised type renders nothing, an unrecognised tool falls back
-    to a [k=v] argument summary, and missing or wrong-typed fields are treated
-    as absent, so a partial or foreign log still displays. Entries must be fed
-    in order — a [toolResult] rendered before its call cannot name its file. *)
+(** [entry t json] renders one session-log entry — [session], [model_change], or
+    [message] (user / assistant / toolResult). Unknown entry types and unknown
+    tools degrade rather than fail: an unrecognised type renders nothing, an
+    unrecognised tool falls back to a [k=v] argument summary, and missing or
+    wrong-typed fields are treated as absent, so a partial or foreign log still
+    displays. Entries must be fed in order — a [toolResult] rendered before its
+    call cannot name its file. *)
 
 val footer : t -> Yojson.Safe.t -> string list
 (** [footer t envelope] renders the run's tail from the result envelope

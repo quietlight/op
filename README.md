@@ -103,7 +103,6 @@ That writes `settings.json`. Everything else in that file is optional:
   "defaultProvider": "anthropic",
   "defaultModel": "claude-sonnet-5",
   "contextLimit": 0.85,
-  "gateModel": "openai/gpt-5.6-mini",
   "handoffModel": "anthropic/claude-opus-5",
   "nuDefaultProfile": "chat",
   "nuProfiles": {
@@ -122,7 +121,6 @@ That writes `settings.json`. Everything else in that file is optional:
 | key                | what it does                                                        |
 |--------------------|---------------------------------------------------------------------|
 | `contextLimit`     | Fraction of the context window at which a run stops (default 0.85). |
-| `gateModel`        | Model used as the gate's judge for scripts that touch sensitive paths. Unset means those scripts are blocked. |
 | `handoffModel`     | Model that writes `--handoff` briefs. Use a strong one with a large window. |
 | `nuProfiles`       | Named capability profiles. See [Profiles](#profiles).               |
 | `nuDefaultProfile` | Profile used when `--profile` is not given.                         |
@@ -204,9 +202,9 @@ and rejects anything the profile does not allow:
 - the network, exec and dispatch builtins (`http`, `run-external`, `exec`,
   `source`, `plugin` and friends)
 
-Scripts that name sensitive paths are sent to the `gateModel` judge for a
-second opinion, and blocked if no judge is configured. Every judge call is
-logged under `~/.op_global/gate/` for audit.
+Scripts that name sensitive paths (ssh keys, cloud credentials, `.env`, shell
+history) or write dot-files are denied too. That check is a text match on the
+script, so it stops an incidental read, not a determined one.
 
 The script then runs with a PATH containing only the profile's externals, and
 an environment that is an allowlist, not an inheritance. Only `HOME`, `USER`,

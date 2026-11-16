@@ -1,7 +1,7 @@
 (* The static AST gate for the [nu] tool (see gate_nu.mli). Layer 1 walks the
    flattened Nushell token stream to enforce the capability boundary (externals
-   subset of the toolbox; no network/exec/dispatch builtins). Layer 2 routes
-   secret-path and dot-file writes to the shared judge. The token stream is
+   subset of the toolbox; no network/exec/dispatch builtins). Layer 2 denies
+   scripts that name a secret path or write a dot-file. The token stream is
    obtained through an injected closure so the walk stays pure and unit-testable
    on canned JSON.
 
@@ -340,11 +340,10 @@ let check_computed_head text =
        command by its bare name."
   else Ok ()
 
-(* Layer 2, reusing {!Gate}'s shared sensitive-path pattern and judge routing.
-   A `save` or redirect
-   whose target text is a dot-path is caught alongside the secret-path names —
-   nu builtins read/write files with no external call, so the AST walk alone
-   would pass them. *)
+(* Layer 2, reusing {!Gate}'s shared sensitive-path pattern. A `save` or
+   redirect whose target text is a dot-path is caught alongside the secret-path
+   names — nu builtins read/write files with no external call, so the AST walk
+   alone would pass them. *)
 let save_dotfile_re =
   Re.Perl.compile_pat ~opts:[ `Caseless ]
     {|\bsave\b\s+(--?\w[\w-]*\s+)*('|"|)?(~/\.|\.[A-Za-z]|[^\s|;&'"]*/\.)|}
@@ -353,10 +352,12 @@ let redirect_dotfile_re =
   Re.Perl.compile_pat ~opts:[ `Caseless ]
     {|(\bo|\be|\bout|\berr|\bo\+e)?>>?\s*('|"|)?(~/\.|\.[A-Za-z]|[^\s|;&'"]*/\.)|}
 
-let touches_sensitive_path script =
-  Re.execp Gate.sensitive_path_re script
-  || Re.execp save_dotfile_re script
-  || Re.execp redirect_dotfile_re script
+(* The text that tripped Layer 2, if any: quoted back in the deny so the model
+   (and the human reading the transcript) can see what matched. *)
+let sensitive_match text =
+  List.find_map
+    (fun re -> Option.map (fun g -> Re.Group.get g 0) (Re.exec_opt re text))
+    [ Gate.sensitive_path_re; save_dotfile_re; redirect_dotfile_re ]
 
 (* Layer 1 over one source text: the deterministic checks shared by the
    top-level script and each vetted module — computed-head text scan, AST
@@ -374,46 +375,33 @@ let analyze_source ~ast ~externals ~modules ~plugins text =
       let* () = analyze_ast ~externals ~modules ~plugins json in
       Ok (used_modules ~modules json)
 
-(* The judge adjudicates source, so when the sensitive path is in an imported
-   module the script alone is not enough material: `use secrets.nu *; peek`
-   looks inert. Append the offending module sources under a header so the judge
-   sees what `peek` actually does. *)
-let judge_command ~script ~sensitive_modules =
-  match sensitive_modules with
-  | [] -> script
-  | mods ->
-      let one (name, source) = Fmt.str "# module %s\n%s" name source in
-      Fmt.str "%s\n\n# --- imported module sources under review ---\n%s" script
-        (String.concat "\n" (List.map one mods))
+(* Layer 2 is a hard deny. There is no second opinion to ask and no
+   confirmation UI, so the message is the steering: it names the file to change
+   (the script, or the imported module) and the text that matched. *)
+let sensitive_advice =
+  "secret-bearing paths and dot-file writes are denied in the nu tool. If the \
+   task really needs that file, stop and tell the user."
 
-(* [in_script] and [sensitive_modules] are the two places layer 2 can fire; the
-   reason names whichever tripped so the deny the model reads points at the file
-   to change. *)
-let adjudicate_sensitive ~judge ~window ~script ~in_script ~sensitive_modules =
-  let command = judge_command ~script ~sensitive_modules in
-  let names = String.concat ", " (List.map fst sensitive_modules) in
+let sensitive_verdict ~in_script ~sensitive_modules =
   match (in_script, sensitive_modules) with
-  | false, [] -> Gate.Allow
-  | true, [] ->
-      Gate.adjudicate ~judge ~window ~command
-        "the nu script reads or writes a sensitive path"
-  | false, _ ->
+  | None, [] -> Gate.Allow
+  | Some hit, _ ->
       Fmt.kstr
-        (Gate.adjudicate ~judge ~window ~command)
-        "module %s, imported by the nu script, reads or writes a sensitive path"
-        names
-  | true, _ ->
+        (fun s -> Gate.Deny s)
+        "the nu script names a sensitive path (matched `%s`): %s" hit
+        sensitive_advice
+  | None, (name, hit) :: _ ->
       Fmt.kstr
-        (Gate.adjudicate ~judge ~window ~command)
-        "the nu script and module %s read or write a sensitive path" names
+        (fun s -> Gate.Deny s)
+        "module `%s`, imported by the nu script, names a sensitive path \
+         (matched `%s`): %s"
+        name hit sensitive_advice
 
 (* Vet the transitive closure of the [names]'d modules, each re-read from disk
    for this call so the bytes Layer 1 audits are the bytes nu will parse. The
    per-call [cache] memoises repeated imports and its in-progress [Ok ()]
    placeholder guards mutually-importing modules. Returns the vetting result and
-   the module sources that tripped Layer 2, which the judge payload carries —
-   because a top-level [use secrets.nu *; peek] shows the judge nothing on its
-   own.
+   the modules that tripped Layer 2, each with the text that matched.
 
    Layer 2 runs over module sources as well as the top-level script. Module dirs
    are not the user-authored-only artifacts they read as: the nu tool can [save]
@@ -446,8 +434,7 @@ let vet_modules ~analyze ~modules names =
           | Some source when String.length source > max_script_chars ->
               (* The anti-runaway bound is the top-level script's; a module is a
                  script you import, so it obeys the same cap. Without this the
-                 gate feeds an unbounded module to `nu ast` and appends an
-                 unbounded body to the judge payload — module dirs are
+                 gate feeds an unbounded module to `nu ast` — module dirs are
                  run-writable, so the size is attacker-chosen. Production also
                  skips oversized files before they are read (bin/main's
                  [scan_module_sources]); this is the gate's own invariant, since
@@ -457,8 +444,9 @@ let vet_modules ~analyze ~modules names =
                  applies to modules too — split it into smaller modules"
                 name (String.length source) max_script_chars
           | Some source ->
-              if touches_sensitive_path source then
-                sensitive := !sensitive @ [ (name, source) ];
+              Option.iter
+                (fun hit -> sensitive := !sensitive @ [ (name, hit) ])
+                (sensitive_match source);
               Result.map_error
                 (fun e -> Fmt.str "vetting module `%s` failed: %s" name e)
                 (let* uses = analyze source in
@@ -472,8 +460,8 @@ let vet_modules ~analyze ~modules names =
   let result = vet_all names in
   (result, !sensitive)
 
-let verdict ~ast ~externals ~scan_modules ~plugins ~judge =
- fun ~window ~script ->
+let verdict ~ast ~externals ~scan_modules ~plugins =
+ fun ~script ->
   if String.length script > max_script_chars then
     Fmt.kstr
       (fun s -> Gate.Deny s)
@@ -492,6 +480,5 @@ let verdict ~ast ~externals ~scan_modules ~plugins ~judge =
         match result with
         | Error reason -> Gate.Deny reason
         | Ok () ->
-            adjudicate_sensitive ~judge ~window ~script
-              ~in_script:(touches_sensitive_path script)
+            sensitive_verdict ~in_script:(sensitive_match script)
               ~sensitive_modules)

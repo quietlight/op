@@ -150,8 +150,8 @@ let uniquifier ~emit messages =
     { tc with id }
 
 (* Dispatch one allowed/warned/denied call, emitting its finish event. A Warn
-   runs the tool then appends steering to its result; a Deny and a Fault both
-   short-circuit to an is_error result without running the tool. (Code_red is
+   runs the tool then appends steering to its result; a Deny short-circuits
+   to an is_error result without running the tool. (Code_red is
    handled by the caller, which must also answer the turn's remaining calls.) *)
 let gated_result ~tools ~emit ~verdict (tc : Llm.tool_call) =
   let result =
@@ -165,23 +165,6 @@ let gated_result ~tools ~emit ~verdict (tc : Llm.tool_call) =
           Llm.id = tc.id;
           name = tc.name;
           content = "blocked by gate: " ^ m;
-          is_error = true;
-          details = None;
-        }
-    (* Worded to say plainly that this is not a ruling on the command. The
-       model reads these and adapts, and "blocked by gate" taught it the wrong
-       lesson from a judge that had merely failed to answer: it would rewrite a
-       perfectly ordinary command into something worse, or give up on a line of
-       work that was never objected to. Saying the call may be retried is safe
-       because Gate.combine bounds the retries — three faults in the window end
-       the run. *)
-    | Gate.Fault m ->
-        {
-          Llm.id = tc.id;
-          name = tc.name;
-          content =
-            "the gate could not decide (a gate fault, not a judgement on this \
-             call): " ^ m ^ ". You may retry the same call once.";
           is_error = true;
           details = None;
         }

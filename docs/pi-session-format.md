@@ -38,8 +38,7 @@ line is an **entry**.
 The header may carry `parentSession` (path to the file this session was
 forked from). It is *not* part of the entry tree. op writes it for
 `op --fromSession ID` — a fresh session that continues an older one's work from
-a handoff prompt (see `op --help`, CONTEXT AND HANDOFF) — and for the gate log
-below.
+a handoff prompt (see `op --help`, CONTEXT AND HANDOFF).
 
 ## The entry tree
 
@@ -178,37 +177,15 @@ in this document changes with the flag.
   distinguishable from the entry lines without reassembling `answer`. A hard
   failure is the tagged error envelope,
   `{"type":"result","error":…,"isError":true}`. Exit codes match `--json`.
-- Gate-judge entries (below) go to their own file and are **never** streamed.
 - If session logging is impossible (e.g. `HOME` unset), op warns on stderr and
   the stream degrades to the result line alone — streaming never blocks a run.
 
-## Gate judge logs
+## Gate judge logs (retired)
 
-Runs whose gate consults the LLM judge (see `lib/gate_judge.mli`) also write an
-**audit log in this same format** under `~/.op_global/gate/--<encoded cwd>--/`
-— a sibling root to `sessions`, same file naming, same header/entry schema. The
-file is created lazily on the first judge call, so the common zero-judge-call
-run leaves nothing behind; when one exists, its path is printed on stderr
-(`gate log: …`) at the end of the run.
-
-Shape: header (`parentSession` points at the run's main session file) →
-`model_change` (the configured `gateModel`) → then, per judge call:
-
-- a `user` message — the exact JSON payload the judge model received
-  (`{"recent": [...], "command": "..."}`); the judge's system prompt is not
-  stored, per pi convention (it is a constant in the binary);
-- an `assistant` message — the raw response with real token usage, absent when
-  the transport failed;
-- a `custom` entry, `customType` `"gate_verdict"`, whose `data` records the
-  final parsed verdict: `verdict` (`allow`/`warn`/`deny`/`code_red`), `reason`
-  (the verdict's reason), `routedBecause` (why the deterministic rules routed
-  the command to the judge), and `command`. The verdict is recorded explicitly
-  because it can differ from the raw response — unparseable output, unknown
-  verdicts, and transport errors all coerce to deny.
-
-This is an audit trail wearing session clothes: consecutive judge calls are
-independent conversations, not multi-turn history, so resuming a gate log is
-meaningless and `op --list` deliberately ignores these files. Browse them raw
-or with `nu_modules/pi-session-view.nu`. The intended uses are tracking down
-judge errors and miss-allows, and spotting commands that recur often enough to
-deserve a deterministic allowlist entry.
+Until 2026-11 the gate could consult an LLM judge, and those runs wrote an
+audit log in this same format under `~/.op_global/gate/--<encoded cwd>--/`:
+per judge call a `user` message (the payload), an `assistant` message (the raw
+reply) and a `custom` entry with `customType` `"gate_verdict"`. op no longer
+writes or renders these: the gate is deterministic, and its denials appear in
+the run's own session as ordinary error tool results. Old files can be read
+raw.

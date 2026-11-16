@@ -1,4 +1,4 @@
-(* Tests for Op.Gate: pure path rules, the shared judge/sensitive-path seams,
+(* Tests for Op.Gate: pure path rules, the shared sensitive-path pattern,
    and the sliding-window combination. Everything is exercised through [check]
    on a fresh gate (except the window tests, which reuse one gate to observe
    state across calls). *)
@@ -12,13 +12,12 @@ let path_tc name p = tc ~args:(`Assoc [ ("path", `String p) ]) name
 
 let reason = function
   | Op.Gate.Allow -> ""
-  | Op.Gate.Warn s | Op.Gate.Deny s | Op.Gate.Fault s | Op.Gate.Code_red s -> s
+  | Op.Gate.Warn s | Op.Gate.Deny s | Op.Gate.Code_red s -> s
 
 let tag = function
   | Op.Gate.Allow -> "allow"
   | Op.Gate.Warn _ -> "warn"
   | Op.Gate.Deny _ -> "deny"
-  | Op.Gate.Fault _ -> "fault"
   | Op.Gate.Code_red _ -> "code_red"
 
 let check_tag msg expected tcall =
@@ -63,45 +62,6 @@ let test_glob_paths () =
   (* no path -> defaults to cwd, allowed *)
   check_tag "no path allowed" "allow"
     (tc ~args:(`Assoc [ ("pattern", `String "**/*.ml") ]) "glob")
-
-(* --- adjudicate: the judge seam shared with Gate_nu --- *)
-
-let test_adjudicate_forwards () =
-  let seen = ref None in
-  let judge ~window ~command ~reason =
-    seen := Some (window, command, reason);
-    Op.Gate.Warn "judge says warn"
-  in
-  let v =
-    Op.Gate.adjudicate ~judge:(Some judge) ~window:[ "cwd: /x"; "read a" ]
-      ~command:"open ~/.ssh/id_ed25519" "names a sensitive path"
-  in
-  Alcotest.(check string) "verdict from judge" "warn" (tag v);
-  Alcotest.(check string) "reason from judge" "judge says warn" (reason v);
-  match !seen with
-  | None -> Alcotest.fail "judge was never called"
-  | Some (window, command, why) ->
-      Alcotest.(check string)
-        "command forwarded" "open ~/.ssh/id_ed25519" command;
-      Alcotest.(check string) "reason forwarded" "names a sensitive path" why;
-      Alcotest.(check (list string))
-        "window forwarded" [ "cwd: /x"; "read a" ] window
-
-let test_adjudicate_no_judge_fails_closed () =
-  let v =
-    Op.Gate.adjudicate ~judge:None ~window:[] ~command:"open .env" "flagged"
-  in
-  Alcotest.(check string) "deny with no judge" "deny" (tag v);
-  Alcotest.(check bool)
-    "explains the missing judge" true
-    (Test_support.contains (reason v) "no gate judge")
-
-let test_adjudicate_raising_judge_fails_closed () =
-  let judge ~window:_ ~command:_ ~reason:_ = failwith "boom" in
-  let v =
-    Op.Gate.adjudicate ~judge:(Some judge) ~window:[] ~command:"x" "flagged"
-  in
-  Alcotest.(check string) "raising judge -> deny" "deny" (tag v)
 
 (* --- sensitive_path_re: the secret-path pattern shared with Gate_nu --- *)
 
@@ -171,61 +131,6 @@ let test_repeated_denies_escalate () =
     "third denied call escalates" "code_red"
     (tag (deny ()))
 
-(* A gate fault is not the agent's doing, so it must not count toward the
-   repeated-denial escalation. This is the exact sequence that killed a healthy
-   pb run on 2026-09-01: a real deny (an external not in the nu toolbox), then
-   a judge that answered off-schema, then one more real deny — three blocked
-   calls, but only two of them the agent's. It used to end in code_red. *)
-let test_fault_does_not_count_toward_denies () =
-  let faulting = ref false in
-  let nu ~window:_ ~script:_ =
-    if !faulting then Op.Gate.Fault "judge omitted the verdict field"
-    else Op.Gate.Deny "curl not in toolbox"
-  in
-  let gate = Op.Gate.v ~nu ~cwd () in
-  let nu_tc s = tc ~args:(`Assoc [ ("script", `String s) ]) "nu" in
-  Alcotest.(check string)
-    "first deny" "deny"
-    (tag (Op.Gate.check gate (nu_tc "curl a")));
-  faulting := true;
-  Alcotest.(check string)
-    "judge fault blocks, as a fault" "fault"
-    (tag (Op.Gate.check gate (nu_tc "open x")));
-  faulting := false;
-  Alcotest.(check string)
-    "the third call is still just a deny" "deny"
-    (tag (Op.Gate.check gate (nu_tc "curl b")))
-
-(* Faults still need a bound of their own: a gate that cannot decide three
-   times running stops the run, but under a message that blames the gate. *)
-let test_repeated_faults_escalate () =
-  let nu ~window:_ ~script:_ = Op.Gate.Fault "judge unreachable" in
-  let gate = Op.Gate.v ~nu ~cwd () in
-  let nu_tc s = tc ~args:(`Assoc [ ("script", `String s) ]) "nu" in
-  let call s = Op.Gate.check gate (nu_tc s) in
-  Alcotest.(check string) "first fault" "fault" (tag (call "a"));
-  Alcotest.(check string) "second fault" "fault" (tag (call "b"));
-  let third = call "c" in
-  Alcotest.(check string) "third fault escalates" "code_red" (tag third);
-  Alcotest.(check bool)
-    "and names the gate, not the agent" true
-    (Test_support.contains (reason third) "gate")
-
-(* A fault raises no flagged-call reminder on the next clean call: there was
-   nothing to flag the agent for. *)
-let test_fault_raises_no_reminder () =
-  let faulting = ref true in
-  let nu ~window:_ ~script:_ =
-    if !faulting then Op.Gate.Fault "judge unreachable" else Op.Gate.Allow
-  in
-  let gate = Op.Gate.v ~nu ~cwd () in
-  let nu_tc s = tc ~args:(`Assoc [ ("script", `String s) ]) "nu" in
-  Alcotest.(check string) "fault" "fault" (tag (Op.Gate.check gate (nu_tc "a")));
-  faulting := false;
-  Alcotest.(check string)
-    "next clean call is a plain allow" "allow"
-    (tag (Op.Gate.check gate (nu_tc "b")))
-
 (* --- nu dispatch, over the injected [?nu] closure --- *)
 
 let nu_tc s = tc ~args:(`Assoc [ ("script", `String s) ]) "nu"
@@ -239,14 +144,14 @@ let test_nu_no_gate_fails_closed () =
     (tag (Op.Gate.check gate (nu_tc "ls | length")))
 
 let test_nu_gate_allows () =
-  let nu ~window:_ ~script:_ = Op.Gate.Allow in
+  let nu ~script:_ = Op.Gate.Allow in
   let gate = Op.Gate.v ~nu ~cwd () in
   Alcotest.(check string)
     "nu gate allow" "allow"
     (tag (Op.Gate.check gate (nu_tc "ls | length")))
 
 let test_nu_gate_denies_and_names () =
-  let nu ~window:_ ~script:_ = Op.Gate.Deny "curl not in toolbox" in
+  let nu ~script:_ = Op.Gate.Deny "curl not in toolbox" in
   let gate = Op.Gate.v ~nu ~cwd () in
   let v = Op.Gate.check gate (nu_tc "curl x") in
   Alcotest.(check string) "deny" "deny" (tag v);
@@ -254,30 +159,20 @@ let test_nu_gate_denies_and_names () =
     "carries the reason" true
     (Test_support.contains (reason v) "curl")
 
-let test_nu_receives_window_and_script () =
+let test_nu_receives_script () =
   let seen = ref None in
-  let nu ~window ~script =
-    seen := Some (window, script);
+  let nu ~script =
+    seen := Some script;
     Op.Gate.Allow
   in
   let gate = Op.Gate.v ~nu ~cwd () in
-  ignore (Op.Gate.check gate (path_tc "read" "notes.txt"));
   ignore (Op.Gate.check gate (nu_tc "skraak sql"));
-  match !seen with
-  | None -> Alcotest.fail "nu gate was never called"
-  | Some (window, script) ->
-      Alcotest.(check string) "script forwarded" "skraak sql" script;
-      Alcotest.(check bool)
-        "window carries cwd" true
-        (List.exists (fun s -> Test_support.contains s cwd) window);
-      Alcotest.(check bool)
-        "window carries the prior read" true
-        (List.exists (fun s -> Test_support.contains s "notes.txt") window)
+  Alcotest.(check (option string)) "script forwarded" (Some "skraak sql") !seen
 
 (* Nu verdicts depend on module files, so an identical script is re-gated. *)
 let test_nu_verdict_not_cached () =
   let calls = ref 0 in
-  let nu ~window:_ ~script:_ =
+  let nu ~script:_ =
     incr calls;
     if !calls = 1 then Op.Gate.Allow else Op.Gate.Deny "module changed"
   in
@@ -293,27 +188,13 @@ let suite =
     [
       ("path rules", `Quick, test_paths);
       ("glob root gating", `Quick, test_glob_paths);
-      ("adjudicate forwards to the judge", `Quick, test_adjudicate_forwards);
-      ( "adjudicate without judge fails closed",
-        `Quick,
-        test_adjudicate_no_judge_fails_closed );
-      ( "adjudicate with raising judge fails closed",
-        `Quick,
-        test_adjudicate_raising_judge_fails_closed );
       ("sensitive paths match", `Quick, test_sensitive_paths_match);
       ("sensitive path near misses", `Quick, test_sensitive_path_near_misses);
       ("warn fires once then rearms", `Quick, test_warn_fires_once_then_rearms);
       ("repeated denies escalate", `Quick, test_repeated_denies_escalate);
-      ( "a fault does not count toward denies",
-        `Quick,
-        test_fault_does_not_count_toward_denies );
-      ("repeated faults escalate", `Quick, test_repeated_faults_escalate);
-      ("a fault raises no reminder", `Quick, test_fault_raises_no_reminder);
       ("nu without gate fails closed", `Quick, test_nu_no_gate_fails_closed);
       ("nu gate allows", `Quick, test_nu_gate_allows);
       ("nu gate denies and names", `Quick, test_nu_gate_denies_and_names);
-      ( "nu gate sees window + script",
-        `Quick,
-        test_nu_receives_window_and_script );
+      ("nu gate sees the script", `Quick, test_nu_receives_script);
       ("nu verdict not cached", `Quick, test_nu_verdict_not_cached);
     ] )

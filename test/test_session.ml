@@ -147,8 +147,8 @@ let test_session_file_is_private () =
   let perm = (Unix.stat path).Unix.st_perm land 0o777 in
   Alcotest.(check int) "session file mode is 0600" 0o600 perm
 
-(* parentSession appears in the header when given (the gate log points it at
-   the run's main session file); a plain session header omits it. *)
+(* parentSession appears in the header when given ([--fromSession] points it at
+   the session being continued); a plain session header omits it. *)
 let test_session_parent_session_header () =
   with_temp_dir @@ fun dir ->
   let session =
@@ -169,29 +169,6 @@ let test_session_parent_session_header () =
   Alcotest.(check bool)
     "absent when not given" true
     (member "parentSession" plain = `Null)
-
-let test_session_custom_entry () =
-  with_temp_dir @@ fun dir ->
-  let session =
-    match
-      Op.Session.v ~dir ~cwd:"/tmp/proj" ~provider:"anthropic" ~model:"claude-x"
-        ()
-    with
-    | Ok s -> s
-    | Error e -> Alcotest.fail e
-  in
-  Op.Session.append_custom session ~custom_type:"gate_verdict"
-    ~data:(`Assoc [ ("verdict", `String "allow") ]);
-  let path = Op.Session.path session in
-  Op.Session.close session;
-  let entry = List.rev (read_jsonl path) |> List.hd in
-  Alcotest.(check string) "type" "custom" (str "type" entry);
-  Alcotest.(check string) "customType" "gate_verdict" (str "customType" entry);
-  Alcotest.(check string)
-    "data carried" "allow"
-    (str "verdict" (member "data" entry));
-  (* custom entries join the parent chain like any other entry *)
-  Alcotest.(check bool) "has parentId" true (member "parentId" entry <> `Null)
 
 let test_session_dir_encoding () =
   Alcotest.(check string)
@@ -267,7 +244,6 @@ let suite =
       ("message shapes", `Quick, test_session_message_shapes);
       ("session file is private", `Quick, test_session_file_is_private);
       ("parentSession header field", `Quick, test_session_parent_session_header);
-      ("custom entry", `Quick, test_session_custom_entry);
       ("dir encoding", `Quick, test_session_dir_encoding);
       ("resume unknown leaf", `Quick, test_session_resume_unknown_leaf);
       ("sink mirrors the file", `Quick, test_session_sink_mirrors_file);

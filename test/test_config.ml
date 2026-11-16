@@ -5,7 +5,7 @@ module Config_testing = Op.Config.For_testing
 let test_parse_settings () =
   let json =
     Yojson.Safe.from_string
-      {|{"defaultProvider": "deepseek", "defaultModel": "deepseek-chat", "gateModel": "anthropic/claude-haiku-4-5-20251001", "nuProfiles": {"data": {"externals": ["skraak", "op"]}}, "defaultThinkingLevel": "off"}|}
+      {|{"defaultProvider": "deepseek", "defaultModel": "deepseek-chat", "nuProfiles": {"data": {"externals": ["skraak", "op"]}}, "defaultThinkingLevel": "off"}|}
   in
   match Config_testing.parse_settings json with
   | Ok settings ->
@@ -13,9 +13,6 @@ let test_parse_settings () =
         "default provider" (Some "deepseek") settings.provider;
       Alcotest.(check (option string))
         "default model" (Some "deepseek-chat") settings.model;
-      Alcotest.(check (option string))
-        "gate model" (Some "anthropic/claude-haiku-4-5-20251001")
-        settings.gate_model;
       let profile =
         match settings.nu_profiles with
         | [ ("data", p) ] -> p
@@ -33,7 +30,6 @@ let test_parse_settings_omitted () =
   | Ok settings ->
       Alcotest.(check (option string)) "default provider" None settings.provider;
       Alcotest.(check (option string)) "default model" None settings.model;
-      Alcotest.(check (option string)) "gate model" None settings.gate_model;
       Alcotest.(check int) "nu profiles" 0 (List.length settings.nu_profiles)
   | Error err -> Alcotest.fail (Op.Config.pp_error err)
 
@@ -253,7 +249,8 @@ let test_update_settings_preserves_unrelated () =
   Alcotest.(check string)
     "model" "gpt-4o"
     (member "defaultModel" result |> to_string);
-  (* gateModel is preserved untouched across a --set default round-trip *)
+  (* a key op does not know (here a retired one) survives a --set default
+     round-trip untouched *)
   Alcotest.(check string)
     "gate model" "anthropic/haiku"
     (member "gateModel" result |> to_string);

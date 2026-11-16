@@ -32,7 +32,6 @@ type nu_profile = {
 type settings = {
   provider : string option;
   model : string option;
-  gate_model : string option;
   handoff_model : string option;
   context_limit : float option;
   nu_profiles : (string * nu_profile) list;
@@ -192,7 +191,6 @@ let parse_settings json =
     {
       provider = optional_string_field "defaultProvider" json;
       model = optional_string_field "defaultModel" json;
-      gate_model = optional_string_field "gateModel" json;
       handoff_model = optional_string_field "handoffModel" json;
       context_limit;
       nu_profiles = parse_nu_profiles json;
@@ -314,7 +312,6 @@ let load_settings dir =
         {
           provider = None;
           model = None;
-          gate_model = None;
           handoff_model = None;
           context_limit = None;
           nu_profiles = [];
@@ -377,7 +374,6 @@ let load_config () =
 
 let default_provider config = config.settings.provider
 let default_model config = config.settings.model
-let gate_model config = config.settings.gate_model
 let handoff_model config = config.settings.handoff_model
 
 (* The gist's recommendation (85-90%), earlier than Claude Code's 95%: leave
@@ -508,7 +504,6 @@ module For_testing = struct
         {
           provider = None;
           model = None;
-          gate_model = None;
           handoff_model = None;
           context_limit = None;
           nu_profiles = [];

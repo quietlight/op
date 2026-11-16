@@ -211,8 +211,7 @@ let scan_module_sources dirs () =
             let path = Filename.concat dir name in
             (* Cap the read: module dirs are writable by the nu tool alone, so a
                runaway run can drop a huge .nu file that would otherwise be read
-               in full on every gate call (memory), fed to `nu ast`, and — if it
-               names a sensitive path — appended to the judge payload. Skip an
+               in full on every gate call (memory), and fed to `nu ast`. Skip an
                oversized file before reading it; it becomes un-importable (a
                clean "module not found" deny) rather than an amplifier. *)
             let oversized =
@@ -462,7 +461,7 @@ let setup_call ~env ~tls ~provider ~api_key ~model ~max_tokens ~tools =
       ()
     |> Result.map_error Op.Transport.pp_error
   in
-  (call, post)
+  call
 
 let build_messages ~cwd ~prompt ~image_blocks ~prior_history ~tool_names =
   let date =
@@ -476,7 +475,7 @@ let build_messages ~cwd ~prompt ~image_blocks ~prior_history ~tool_names =
 (* [resume] is a stderr trailer for the machine modes, whose stdout is JSON a
    human is not reading. The human transcript already ends with the same line in
    its footer, so repeating it here would just print it twice. *)
-let close_session ~(mode : Cli.output) session gate_log =
+let close_session ~(mode : Cli.output) session =
   Option.iter
     (fun s ->
       match (mode, Op.Session.leaf s) with
@@ -486,10 +485,6 @@ let close_session ~(mode : Cli.output) session gate_log =
             (Op.Session.id s) leaf
       | _, None -> Fmt.epr "session: %s\n%!" (Op.Session.id s))
     session;
-  Option.iter
-    (fun p -> Fmt.epr "gate log: %s\n%!" p)
-    (Op.Gate_log.path gate_log);
-  Op.Gate_log.close gate_log;
   Option.iter Op.Session.close session
 
 let warn_branch_correction = function
@@ -556,37 +551,14 @@ let report_result ~(mode : Cli.output) ~session ~base ~window ~model
       List.iter print_endline (Op.Render.footer (Lazy.force renderer) envelope)
   | Cli.Stream | Cli.Json -> print_endline (Yojson.Safe.to_string envelope)
 
-(* The gate-judge audit log: lazy (nothing on disk until a judge call), rooted
-   beside the main sessions under ~/.op_global/gate and linked to this run's
-   session file via the header's parentSession. *)
-let open_gate_log ~cwd ~session =
-  Op.Gate_log.v ~cwd
-    ~parent_session:(Option.map Op.Session.path session)
-    ~warn:(fun msg -> Fmt.epr "warning: %s\n%!" msg)
-    ()
-
-(* Resolve the gate's LLM judge. A judge configured but unusable is a warned
-   fallback, not a hard error: the gate then denies anything off its allowlist. *)
-let resolve_judge ~config ~post ~gate_log =
-  match Op.Gate_judge.resolve ~log:gate_log config ~post with
-  | Op.Gate_judge.Ready j -> Some j
-  | Not_configured -> None
-  | Unusable reason ->
-      Fmt.epr
-        "warning: gate judge disabled — %s; commands off the allowlist will be \
-         denied@."
-        reason;
-      None
-
-(* Assemble the run's gate: the LLM judge (if any), the nu AST verdict when a nu
-   tool was built, and the cwd-scoped path checks. *)
-let build_gate ~config ~post ~cwd ~nu_ctx ~gate_log =
-  let judge = resolve_judge ~config ~post ~gate_log in
+(* Assemble the run's gate: the nu AST verdict when a nu tool was built, and
+   the cwd-scoped path checks. *)
+let build_gate ~cwd ~nu_ctx =
   let nu =
     Option.map
       (fun ctx ->
         Op.Gate_nu.verdict ~ast:ctx.ast ~externals:ctx.externals
-          ~scan_modules:ctx.scan_modules ~plugins:ctx.plugins ~judge)
+          ~scan_modules:ctx.scan_modules ~plugins:ctx.plugins)
       nu_ctx
   in
   Op.Gate.v ?nu ~cwd ()
@@ -676,12 +648,12 @@ let context_guard ~config ~provider ~model =
       (Some window, Some over)
 
 (* The run's tail: report the outcome (one envelope, tagged when it shares
-   stdout with the streamed entry lines), print the stderr trailers (resume
-   hint, gate-log path), close the logs, and exit with the classified code. *)
-let finish ~(mode : Cli.output) ~session ~gate_log ~base ~window ~model
-    ~extra_metadata result =
+   stdout with the streamed entry lines), print the stderr resume hint, close
+   the session, and exit with the classified code. *)
+let finish ~(mode : Cli.output) ~session ~base ~window ~model ~extra_metadata
+    result =
   report_result ~mode ~session ~base ~window ~model ~extra_metadata result;
-  close_session ~mode session gate_log;
+  close_session ~mode session;
   exit (Op.Run_report.classify result).exit_code
 
 let run_with_context ~env ~mode ~cwd ~config ~provider ~api_key ~model ~tls
@@ -700,11 +672,10 @@ let run_with_context ~env ~mode ~cwd ~config ~provider ~api_key ~model ~tls
   in
   let emit = build_emit ~session ~provider ~model in
   let tools, nu_ctx = build_tools ~env ~profile ~tool_names ~depth in
-  let call, post =
+  let call =
     setup_call ~env ~tls ~provider ~api_key ~model ~max_tokens ~tools
   in
-  let gate_log = open_gate_log ~cwd ~session in
-  let gate = build_gate ~config ~post ~cwd ~nu_ctx ~gate_log in
+  let gate = build_gate ~cwd ~nu_ctx in
   Option.iter
     (fun s -> Op.Session.append_user s ~blocks:image_blocks ~text:prompt ())
     session;
@@ -717,7 +688,7 @@ let run_with_context ~env ~mode ~cwd ~config ~provider ~api_key ~model ~tls
     Op.Agent.run ~call ~tools ~emit ~gate:(Op.Gate.check gate) ?max_steps
       ?over_context ~messages ()
   in
-  finish ~mode ~session ~gate_log ~base:(List.length messages) ~window
+  finish ~mode ~session ~base:(List.length messages) ~window
     ~model:(provider.Op.Config.name ^ "/" ^ model)
     ~extra_metadata result
 
@@ -760,7 +731,7 @@ let run_handoff ~env ~json ~cwd ~provider ~api_key ~model ~tls ~session_id
     | Error e -> fail e
   in
   let files = Op.Handoff.files_of_history history in
-  let call, _ =
+  let call =
     setup_call ~env ~tls ~provider ~api_key ~model
       ~max_tokens:(Op.Config.max_tokens_for provider ~model)
       ~tools:[]

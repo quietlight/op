@@ -8,8 +8,7 @@
 # The session format is documented in op's docs/pi-session-format.md.
 # Each line of the file is a JSON object; the first is the "session" header
 # and the rest are entries. This module renders the header, model changes,
-# message entries (user / assistant / toolResult), and the gate log's
-# custom gate_verdict entries. Entry types it does not know how to render
+# and message entries (user / assistant / toolResult). Entry types it does not know how to render
 # are silently skipped, and missing optional fields are tolerated so a
 # partial/crashed log still displays.
 #
@@ -409,25 +408,6 @@ def render-model-change [e] {
     print $"(ansi yellow)[model → ($e | get -o provider | default "?")/($e | get -o modelId | default "?")](ansi reset)"
 }
 
-# The gate log's final-verdict footer (see docs/pi-session-format.md, "Gate
-# judge logs"): the parsed verdict can differ from the raw model response
-# above it, so it gets its own line. Other customTypes are skipped.
-def render-custom [e] {
-    if ($e | get -o customType) == "gate_verdict" {
-        let d = ($e | get -o data | default {})
-        let verdict = ($d | get -o verdict | default "?")
-        let color = (match $verdict {
-            "allow" => (ansi green),
-            "warn" => (ansi yellow),
-            _ => (ansi red),
-        })
-        let reason = ($d | get -o reason | default "")
-        let reason = (if ($reason | is-not-empty) { $": ($reason)" } else { "" })
-        let routed = ($d | get -o routedBecause | default "?")
-        print $"($color)[gate → ($verdict)($reason) — routed: ($routed)](ansi reset)"
-    }
-}
-
 # --- call memory -----------------------------------------------------------
 
 # A toolResult names its call by id and nothing else, so naming the file a read
@@ -465,7 +445,6 @@ export def render-entry [e: record, calls: record = {}] {
         "session" => { render-session $e }
         "model_change" => { render-model-change $e }
         "message" => { render-message $e $calls }
-        "custom" => { render-custom $e }
         _ => {}
     }
 }

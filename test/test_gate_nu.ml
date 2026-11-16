@@ -1,7 +1,7 @@
 (* Tests for Op.Gate_nu: the static AST walk (layer 1) against the committed
    real-nu-0.114 fixtures under fixtures/nu, and the full [verdict] closure
    (length cap, AST-failure Deny, and the layer-2 sensitive-path routing) driven
-   by canned [ast]/judge closures — no nu process is spawned here. *)
+   by canned [ast] closures — no nu process is spawned here. *)
 
 let externals = [ "skraak"; "op" ]
 
@@ -118,7 +118,7 @@ let test_handshake_read_ok () = ok "handshake_read"
 let test_op_interp_ok () = ok "op_interp"
 
 (* open/save read/write files with no external call, so the AST walk passes them
-   — layer 2 (text check) is what routes them to the judge. *)
+   — layer 2 (text check) is what denies them. *)
 let test_sensitive_open_passes_layer1 () = ok "sensitive_open"
 let test_save_dotfile_passes_layer1 () = ok "save_dotfile"
 
@@ -157,28 +157,27 @@ let test_empty_toolbox_denies_external () =
         (Test_support.contains e "skraak")
   | Ok () -> Alcotest.fail "empty toolbox should deny the skraak external"
 
-(* --- layer 2 + verdict wiring, with canned ast/judge --- *)
+(* --- layer 2 + verdict wiring, with canned ast --- *)
 
 let tag = function
   | Op.Gate.Allow -> "allow"
   | Op.Gate.Warn _ -> "warn"
   | Op.Gate.Deny _ -> "deny"
-  | Op.Gate.Fault _ -> "fault"
   | Op.Gate.Code_red _ -> "code_red"
 
 let reason = function
   | Op.Gate.Allow -> ""
-  | Op.Gate.Warn s | Op.Gate.Deny s | Op.Gate.Fault s | Op.Gate.Code_red s -> s
+  | Op.Gate.Warn s | Op.Gate.Deny s | Op.Gate.Code_red s -> s
 
 (* An [ast] closure serving a fixture regardless of the script text, so the
    verdict path can be exercised without nu. *)
 let ast_of name _script = Ok (fixture name)
 let ast_fails _script = Error "parse error at 1:5"
 
-let verdict ?judge ?(modules = []) ?(plugins = []) ~ast ~script () =
+let verdict ?(modules = []) ?(plugins = []) ~ast ~script () =
   Op.Gate_nu.verdict ~ast ~externals
     ~scan_modules:(fun () -> modules)
-    ~plugins ~judge ~window:[ "cwd: /x" ] ~script
+    ~plugins ~script
 
 let test_verdict_clean_allows () =
   let v = verdict ~ast:(ast_of "clean") ~script:"skraak sql ..." () in
@@ -206,28 +205,22 @@ let test_verdict_too_long_denies () =
     "explains the cap" true
     (Test_support.contains (reason v) "too long")
 
-(* Layer 2: a clean AST but a script that names a secret path routes to the
-   judge (here a fake that warns), and fails closed with no judge. *)
-let test_verdict_sensitive_path_routes_to_judge () =
-  let judge ~window:_ ~command:_ ~reason:_ = Op.Gate.Warn "judged" in
-  let v =
-    verdict ~judge ~ast:(ast_of "sensitive_open")
-      ~script:"open ~/.ssh/id_ed25519" ()
-  in
-  Alcotest.(check string) "routes to judge" "warn" (tag v)
-
-let test_verdict_sensitive_path_no_judge_fails_closed () =
+(* Layer 2: a clean AST but a script that names a secret path is denied, and
+   the deny quotes what matched so a false positive is visible as one. *)
+let test_verdict_sensitive_path_denies () =
   let v =
     verdict ~ast:(ast_of "sensitive_open") ~script:"open ~/.ssh/id_ed25519" ()
   in
-  Alcotest.(check string) "no judge -> deny" "deny" (tag v)
+  Alcotest.(check string) "secret path -> deny" "deny" (tag v);
+  Alcotest.(check bool)
+    "quotes the match" true
+    (Test_support.contains (reason v) "`.ssh`")
 
-let test_verdict_save_dotfile_routes_to_judge () =
-  let judge ~window:_ ~command:_ ~reason:_ = Op.Gate.Warn "judged" in
+let test_verdict_save_dotfile_denies () =
   let v =
-    verdict ~judge ~ast:(ast_of "save_dotfile") ~script:"echo hi | save .env" ()
+    verdict ~ast:(ast_of "save_dotfile") ~script:"echo hi | save .env" ()
   in
-  Alcotest.(check string) "save .env routes" "warn" (tag v)
+  Alcotest.(check string) "save .env -> deny" "deny" (tag v)
 
 (* The declared-variable computed head passes the walk, so the deny must come
    from the verdict's source-text check. *)
@@ -292,8 +285,8 @@ let test_verdict_module_vet_recursive () =
 
 (* Layer 2 over module sources. The module dirs are writable by the nu tool
    itself ([save] to a non-dot path), so a sensitive read hidden in a module and
-   called from an innocuous top-level script must reach the judge exactly as the
-   same line written inline does — otherwise the verdict depends on where the
+   called from an innocuous top-level script must be denied exactly as the
+   same line written inline is — otherwise the verdict depends on where the
    line was written rather than on what it does. *)
 let secret_module = [ ("gpx.nu", "export def peek [] { open ~/.ssh/id_rsa }") ]
 
@@ -301,46 +294,19 @@ let ast_module_clean script =
   if String.length script > 0 && script.[0] = 'e' then Ok (fixture "clean")
   else Ok (fixture "use_module")
 
-let test_verdict_sensitive_in_module_routes_to_judge () =
-  let judge ~window:_ ~command:_ ~reason:_ = Op.Gate.Warn "judged" in
-  let v =
-    verdict ~judge ~modules:secret_module ~ast:ast_module_clean
-      ~script:"use gpx.nu *; peek" ()
-  in
-  Alcotest.(check string) "module secret routes to judge" "warn" (tag v)
-
-let test_verdict_sensitive_in_module_no_judge_fails_closed () =
+let test_verdict_sensitive_in_module_denies () =
   let v =
     verdict ~modules:secret_module ~ast:ast_module_clean
       ~script:"use gpx.nu *; peek" ()
   in
-  Alcotest.(check string) "no judge -> deny" "deny" (tag v);
+  Alcotest.(check string) "module secret -> deny" "deny" (tag v);
   Alcotest.(check bool)
     "names the module" true
     (Test_support.contains (reason v) "gpx.nu")
 
-(* The judge adjudicates source, so a top-level script that only says [use] has
-   to be accompanied by the module body or there is nothing to judge. *)
-let test_verdict_module_source_reaches_judge () =
-  let seen = ref "" in
-  let judge ~window:_ ~command ~reason:_ =
-    seen := command;
-    Op.Gate.Warn "judged"
-  in
-  let _ =
-    verdict ~judge ~modules:secret_module ~ast:ast_module_clean
-      ~script:"use gpx.nu *; peek" ()
-  in
-  Alcotest.(check bool)
-    "judge sees the top-level script" true
-    (Test_support.contains !seen "use gpx.nu");
-  Alcotest.(check bool)
-    "judge sees the module body" true
-    (Test_support.contains !seen "open ~/.ssh/id_rsa")
-
 (* The anti-runaway cap applies to module sources too: module dirs are
-   run-writable, so an oversized module would otherwise feed `nu ast` and the
-   judge payload past the bound the top-level script obeys. The module is
+   run-writable, so an oversized module would otherwise feed `nu ast` past the
+   bound the top-level script obeys. The module is
    rejected on size before its own AST is needed. *)
 let test_verdict_module_too_long_denies () =
   let big = String.make (Op.Gate_nu.max_script_chars + 1) 'x' in
@@ -361,11 +327,11 @@ let test_verdict_module_appears_between_calls () =
       ~ast:(ast_routing ~top:"use_module" ~gpx:"clean")
       ~externals
       ~scan_modules:(fun () -> !modules)
-      ~plugins:[] ~judge:None
+      ~plugins:[]
   in
-  let first = v ~window:[] ~script:"use gpx.nu" in
+  let first = v ~script:"use gpx.nu" in
   modules := module_sources;
-  let second = v ~window:[] ~script:"use gpx.nu" in
+  let second = v ~script:"use gpx.nu" in
   Alcotest.(check string) "missing module denied" "deny" (tag first);
   Alcotest.(check string) "new module allowed" "allow" (tag second)
 
@@ -379,11 +345,11 @@ let test_verdict_module_mutates_between_calls () =
   let v =
     Op.Gate_nu.verdict ~ast ~externals
       ~scan_modules:(fun () -> [ ("gpx.nu", !source) ])
-      ~plugins:[] ~judge:None
+      ~plugins:[]
   in
-  let first = v ~window:[] ~script:"use gpx.nu" in
+  let first = v ~script:"use gpx.nu" in
   source := "BAD_SRC";
-  let second = v ~window:[] ~script:"use gpx.nu" in
+  let second = v ~script:"use gpx.nu" in
   Alcotest.(check string) "clean module allowed" "allow" (tag first);
   Alcotest.(check string) "mutated module denied" "deny" (tag second);
   Alcotest.(check bool)
@@ -408,18 +374,6 @@ let test_verdict_module_cycle_guard () =
   Alcotest.(check string) "cycle allows" "allow" (tag v);
   Alcotest.(check int) "A analyzed once" 1 !a_calls;
   Alcotest.(check int) "B analyzed once" 1 !b_calls
-
-(* A clean script with no sensitive path is allowed outright — the judge is
-   never consulted (layer 2 is the only path to it). *)
-let test_verdict_clean_skips_judge () =
-  let called = ref false in
-  let judge ~window:_ ~command:_ ~reason:_ =
-    called := true;
-    Op.Gate.Deny "should not run"
-  in
-  let v = verdict ~judge ~ast:(ast_of "clean") ~script:"skraak sql ..." () in
-  Alcotest.(check string) "allow" "allow" (tag v);
-  Alcotest.(check bool) "judge not consulted" false !called
 
 let suite =
   ( "gate_nu",
@@ -478,15 +432,10 @@ let suite =
       ("verdict external denies", `Quick, test_verdict_external_denies);
       ("verdict ast failure denies", `Quick, test_verdict_ast_failure_denies);
       ("verdict too long denies", `Quick, test_verdict_too_long_denies);
-      ( "verdict sensitive path routes to judge",
+      ( "verdict sensitive path denies",
         `Quick,
-        test_verdict_sensitive_path_routes_to_judge );
-      ( "verdict sensitive path no judge fails closed",
-        `Quick,
-        test_verdict_sensitive_path_no_judge_fails_closed );
-      ( "verdict save dotfile routes to judge",
-        `Quick,
-        test_verdict_save_dotfile_routes_to_judge );
+        test_verdict_sensitive_path_denies );
+      ("verdict save dotfile denies", `Quick, test_verdict_save_dotfile_denies);
       ("verdict computed head denies", `Quick, test_verdict_computed_head_denies);
       ("verdict regex anchor allowed", `Quick, test_verdict_regex_anchor_allowed);
       ("verdict module vet pass", `Quick, test_verdict_module_vet_pass);
@@ -495,15 +444,9 @@ let suite =
       ( "verdict module too long denies",
         `Quick,
         test_verdict_module_too_long_denies );
-      ( "verdict sensitive in module routes to judge",
+      ( "verdict sensitive in module denies",
         `Quick,
-        test_verdict_sensitive_in_module_routes_to_judge );
-      ( "verdict sensitive in module fails closed",
-        `Quick,
-        test_verdict_sensitive_in_module_no_judge_fails_closed );
-      ( "verdict module source reaches judge",
-        `Quick,
-        test_verdict_module_source_reaches_judge );
+        test_verdict_sensitive_in_module_denies );
       ( "verdict module appears between calls",
         `Quick,
         test_verdict_module_appears_between_calls );
@@ -511,5 +454,4 @@ let suite =
         `Quick,
         test_verdict_module_mutates_between_calls );
       ("verdict module cycle guard", `Quick, test_verdict_module_cycle_guard);
-      ("verdict clean skips judge", `Quick, test_verdict_clean_skips_judge);
     ] )

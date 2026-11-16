@@ -35,7 +35,7 @@ val v :
     writing the session header plus initial [model_change] and
     [thinking_level_change] entries. [parent_session] is the header's
     [parentSession] field — the path of a related session file (pi uses it for
-    forks; the gate log points it at the run's main session).
+    forks; op for [--fromSession]).
 
     [sink] (default [ignore]) is called with every line written to the file —
     the header first, then each entry — after it has been flushed to disk. This
@@ -70,11 +70,6 @@ val append_user :
 
 val append_tool_result : t -> Llm.tool_result -> unit
 (** [append_tool_result t r] Append a tool result entry [r]. *)
-
-val append_custom : t -> custom_type:string -> data:Yojson.Safe.t -> unit
-(** [append_custom t ~custom_type ~data] Append a pi [custom] entry — extension
-    state that never participates in LLM context. Used by the gate log to record
-    the final verdict of a judge call ([customType] "gate_verdict"). *)
 
 val append_assistant :
   t ->

@@ -6,8 +6,8 @@
     shape-tagged token, so a deterministic walk can decide — {e before} the
     script runs — whether it stays within the toolbox and never reaches the
     network or an out-of-toolbox program. That walk is the capability boundary;
-    the LLM judge is only a secondary text check for file reads/writes the AST
-    cannot classify.
+    a secondary text check denies the file reads/writes the AST cannot classify.
+    The gate is deterministic end to end: no model is consulted.
 
     The stream is flattened rather than the structured [get block] tree on
     purpose: [get block] serializes closure/block bodies as opaque integer
@@ -38,11 +38,10 @@
       cycles.
     - {b Layer 2 — sensitive-path text check}: nu's [open]/[save] read and write
       files with no external call, so a script naming a secret-bearing path
-      (shared with {!Gate.sensitive_path_re}) or writing a dot-file is routed to
-      the judge rather than passing on a clean AST walk alone. Applied to the
-      top-level script {e and} to every vetted module source; when a module
-      trips it, its body is appended to the script the judge adjudicates, since
-      a top-level [use secrets.nu *; peek] carries nothing to judge on its own.
+      (shared with {!Gate.sensitive_path_re}) or writing a dot-file is denied
+      rather than passing on a clean AST walk alone. Applied to the top-level
+      script {e and} to every vetted module source; the deny names whichever
+      tripped it and quotes the matching text.
 
     {b Module dirs are a trust boundary the run can write to.} They are not the
     user-authored-only artifacts they read as: they are ordinary non-dot paths,
@@ -64,8 +63,8 @@ val max_script_chars : int
 (** The anti-runaway character bound. It caps the top-level script and, applied
     identically, each vetted module source — a module is a script you import, so
     it obeys the same limit. Module dirs are run-writable, so an unbounded
-    module would otherwise let a runaway script inflate the [nu ast] input and
-    the judge payload past the bound the top-level script respects. *)
+    module would otherwise let a runaway script inflate the [nu ast] input past
+    the bound the top-level script respects. *)
 
 val analyze_ast :
   externals:string list ->
@@ -85,15 +84,12 @@ val verdict :
   externals:string list ->
   scan_modules:(unit -> (string * string) list) ->
   plugins:string list ->
-  judge:Gate.judge option ->
-  window:string list ->
   script:string ->
   Gate.verdict
-(** [verdict ~ast ~externals ~scan_modules ~plugins ~judge ~window ~script] is
-    the full gate closure injected into {!Gate.v}. For every call,
-    [scan_modules ()] supplies fresh module-name/source pairs; imported modules
-    are vetted recursively with an intra-call cache, ensuring the gate audits
-    the bytes nu will parse. It also caps runaway scripts, denies computed
-    external heads, obtains the AST via [ast], runs {!analyze_ast}, and routes a
-    sensitive-path read/write to [judge] (failing closed when [judge] is [None],
-    via {!Gate.adjudicate}). *)
+(** [verdict ~ast ~externals ~scan_modules ~plugins ~script] is the full gate
+    closure injected into {!Gate.v}. For every call, [scan_modules ()] supplies
+    fresh module-name/source pairs; imported modules are vetted recursively with
+    an intra-call cache, ensuring the gate audits the bytes nu will parse. It
+    also caps runaway scripts, denies computed external heads, obtains the AST
+    via [ast], runs {!analyze_ast}, and denies a script or imported module that
+    names a sensitive path. *)

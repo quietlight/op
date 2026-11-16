@@ -359,24 +359,6 @@ let%expect_test "thinking blocks are shown, capped" =
     Here is the answer.
     |}]
 
-let%expect_test "the gate log's verdict entries render too" =
-  let t = renderer () in
-  show
-    (Render.entry t
-       (json
-          {|{"type":"custom","customType":"gate_verdict","data":{"verdict":"allow","reason":"read-only","routedBecause":"judge"}}|}));
-  show
-    (Render.entry t
-       (json
-          {|{"type":"custom","customType":"gate_verdict","data":{"verdict":"deny","reason":"network","routedBecause":"allowlist"}}|}));
-  show
-    (Render.entry t (json {|{"type":"custom","customType":"other","data":{}}|}));
-  [%expect
-    {|
-    [gate → allow: read-only — routed: judge]
-    [gate → deny: network — routed: allowlist]
-    |}]
-
 let%expect_test "footer: a finished run, with and without a context window" =
   let t = renderer () in
   let env ?context () =

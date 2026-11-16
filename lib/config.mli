@@ -78,10 +78,6 @@ type nu_profile = {
 type settings = {
   provider : string option;
   model : string option;
-  gate_model : string option;
-      (** [gateModel]: an optional ["provider/model"] spec for the permission
-          gate's LLM judge; [None] disables the judge (the gate then fails
-          closed on suspicious commands). *)
   handoff_model : string option;
       (** [handoffModel]: an optional ["provider/model"] spec for [--handoff]'s
           summarising call. It writes the prompt that seeds the next thread, so
@@ -148,10 +144,6 @@ val default_provider : t -> string option
 val default_model : t -> string option
 (** [default_model c] Return the configured default model for [c], or [None]
     when [settings.json] is absent or omits it. *)
-
-val gate_model : t -> string option
-(** [gate_model c] Return the configured [gateModel] spec for the permission
-    gate's judge, or [None] when unset. *)
 
 val handoff_model : t -> string option
 (** [handoff_model c] Return the configured [handoffModel] spec used by

@@ -307,10 +307,6 @@ let append_tool_result t (tr : Llm.tool_result) =
         ]
        @ details_field tr))
 
-let append_custom t ~custom_type ~data =
-  append t ~type_:"custom"
-    [ ("customType", `String custom_type); ("data", data) ]
-
 let close t = close_out t.oc
 
 (* --- resuming ------------------------------------------------------------ *)
