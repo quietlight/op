@@ -191,7 +191,7 @@ let renderer =
 let report_result ~(mode : Cli.output) ~session ~base ~window ~model
     ~extra_metadata result =
   let typed = mode = Cli.Stream in
-  let session_fields = Op.Run_summary.session_fields session in
+  let session_fields = Op.Run_report.session_fields session in
   let envelope =
     match result with
     | Error e ->
@@ -199,7 +199,7 @@ let report_result ~(mode : Cli.output) ~session ~base ~window ~model
           ~metadata:extra_metadata ()
     | Ok (history, outcome) ->
         let answer =
-          Option.value ~default:"" (Op.Run_summary.last_assistant_text history)
+          Option.value ~default:"" (Op.Run_report.last_assistant_text history)
         in
         let u =
           (* Base-scoped: a resumed run replays turns that carry the usage the
@@ -219,7 +219,7 @@ let report_result ~(mode : Cli.output) ~session ~base ~window ~model
           ~cache_write:u.cache_creation
           ~metadata:
             (extra_metadata
-            @ Op.Run_summary.run_metadata ~base history
+            @ Op.Run_report.run_metadata ~base history
             @ Op.Run_report.context_fields ~window history)
           ~outcome ()
   in
@@ -333,7 +333,7 @@ let run_with_context ~env ~mode ~cwd ~config ~provider ~api_key ~model ~tls
   in
   warn_branch_correction branch_correction;
   let extra_metadata =
-    Op.Run_summary.branch_correction_metadata branch_correction
+    Op.Run_report.branch_correction_metadata branch_correction
   in
   (* The entries are produced whether or not they can be saved: a run whose
      log could not be opened still prints its transcript. [session] stays the
@@ -545,33 +545,28 @@ let handoff_cmd ~env ~(mode : Cli.output) ~session_id ~parent_id ~model_spec
       run_handoff ~env ~json:(mode = Cli.Json) ~cwd ~provider ~api_key ~model
         ~tls ~session_id ~parent_id ~goal
 
-let run (opts : Cli.opts) =
-  match opts.set_kind with
-  | Some Set_default -> List_cmd.set_default ~json:opts.json opts.prompt
-  | None -> (
-      match opts.list_kind with
-      | Some kind ->
-          if Option.is_some opts.prompt then
-            List_cmd.list_fail ~text_prefix:"" ~json:opts.json
-              "--list does not accept a PROMPT argument"
-          else
-            List_cmd.run_list ~json:opts.json ~limit:opts.limit
-              ~session_id:opts.session_id kind
-      | None ->
-          Eio_main.run @@ fun env ->
-          Mirage_crypto_rng_unix.use_default ();
-          let mode = Cli.output opts in
-          if opts.handoff then
-            (* --handoff requires --sessionId; the CLI rejects it otherwise. *)
-            handoff_cmd ~env ~mode
-              ~session_id:(Option.get opts.session_id)
-              ~parent_id:opts.parent_id ~model_spec:opts.model_spec
-              ~prompt_file:opts.prompt_file ~prompt:opts.prompt
-          else
-            run_prompt ~env ~mode ~session_id:opts.session_id
-              ~parent_id:opts.parent_id ~from_session:opts.from_session
-              ~model_spec:opts.model_spec ~prompt_file:opts.prompt_file
-              ~max_steps:opts.max_steps ~tools:opts.tools ~profile:opts.profile
-              ~images:opts.images ~context:opts.context ~prompt:opts.prompt)
+let with_eio f =
+  Eio_main.run @@ fun env ->
+  Mirage_crypto_rng_unix.use_default ();
+  f env
+
+let run : Cli.command -> unit = function
+  | Set { kind = Set_default; json; value } -> List_cmd.set_default ~json value
+  | List { json; stray_prompt = true; _ } ->
+      List_cmd.list_fail ~text_prefix:"" ~json
+        "--list does not accept a PROMPT argument"
+  | List { kind; json; limit; session_id; stray_prompt = false } ->
+      List_cmd.run_list ~json ~limit ~session_id kind
+  | Handoff { mode; session_id; parent_id; model_spec; prompt_file; prompt } ->
+      with_eio @@ fun env ->
+      handoff_cmd ~env ~mode ~session_id ~parent_id ~model_spec ~prompt_file
+        ~prompt
+  | Run r ->
+      with_eio @@ fun env ->
+      run_prompt ~env ~mode:r.mode ~session_id:r.session_id
+        ~parent_id:r.parent_id ~from_session:r.from_session
+        ~model_spec:r.model_spec ~prompt_file:r.prompt_file
+        ~max_steps:r.max_steps ~tools:r.tools ~profile:r.profile
+        ~images:r.images ~context:r.context ~prompt:r.prompt
 
 let () = exit (Cmdliner.Cmd.eval (Cli.cmd run))

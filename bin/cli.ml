@@ -296,34 +296,115 @@ let stream_arg =
   in
   Arg.(value & flag & info [ "stream" ] ~doc)
 
-(* [--json] and [--stream] both own stdout and disagree on its shape, so the
-   combination is a usage error (exit 124) rather than a silent precedence
-   rule. *)
-let check_exclusive opts =
-  if opts.json && opts.stream then
-    Error (`Msg "--json and --stream are mutually exclusive")
-  else if opts.session_id <> None && opts.from_session <> None then
-    Error (`Msg "--fromSession and --sessionId are mutually exclusive")
-  else if opts.handoff && opts.session_id = None then
-    Error (`Msg "--handoff requires --sessionId")
-  else if opts.handoff && opts.stream then
-    (* A handoff writes no session entries, so there is no stream to render. *)
-    Error (`Msg "--handoff and --stream are mutually exclusive")
-  else Ok opts
+(* The prompt run's output mode: the human transcript unless a flag asked for
+   one of the machine views. *)
+let output opts =
+  if opts.json then Json else if opts.stream then Stream else Human
 
-let opts =
+(* What one invocation does. The flags are flat because their spellings are
+   pinned (to pi, and to hop), but [--set], [--list] and [--handoff] are really
+   separate commands, and each reads only some of the flags. Parsing lands
+   here, so the dispatcher matches on a command that carries exactly what it
+   needs instead of consulting an options record for combinations that cannot
+   occur. *)
+type run = {
+  mode : output;
+  session_id : string option;
+  parent_id : string option;
+  from_session : string option;
+  model_spec : string option;
+  prompt_file : string option;
+  max_steps : int option;
+  tools : string list option;
+  profile : string option;
+  images : string list;
+  context : string list;
+  prompt : string option;
+}
+
+type command =
+  | Set of { kind : set_kind; json : bool; value : string option }
+  | List of {
+      kind : list_kind;
+      json : bool;
+      limit : int;
+      session_id : string option;
+      stray_prompt : bool;
+    }
+  | Handoff of {
+      mode : output;
+      session_id : string;
+      parent_id : string option;
+      model_spec : string option;
+      prompt_file : string option;
+      prompt : string option;
+    }
+  | Run of run
+
+let usage_error msg = Error (`Msg msg)
+
+(* Flag combinations that cannot mean anything are usage errors (exit 124)
+   rather than silent precedence rules: [--json] and [--stream] both own stdout
+   and disagree on its shape; a handoff writes no session entries, so it has no
+   stream to render. *)
+let command (opts : opts) =
+  match (opts.set_kind, opts.list_kind, opts.handoff, opts.session_id) with
+  | _ when opts.json && opts.stream ->
+      usage_error "--json and --stream are mutually exclusive"
+  | _ when opts.session_id <> None && opts.from_session <> None ->
+      usage_error "--fromSession and --sessionId are mutually exclusive"
+  | _, _, true, None -> usage_error "--handoff requires --sessionId"
+  | _, _, true, _ when opts.stream ->
+      usage_error "--handoff and --stream are mutually exclusive"
+  | Some kind, _, _, _ ->
+      Ok (Set { kind; json = opts.json; value = opts.prompt })
+  | None, Some kind, _, _ ->
+      Ok
+        (List
+           {
+             kind;
+             json = opts.json;
+             limit = opts.limit;
+             session_id = opts.session_id;
+             stray_prompt = Option.is_some opts.prompt;
+           })
+  | None, None, true, Some session_id ->
+      Ok
+        (Handoff
+           {
+             mode = output opts;
+             session_id;
+             parent_id = opts.parent_id;
+             model_spec = opts.model_spec;
+             prompt_file = opts.prompt_file;
+             prompt = opts.prompt;
+           })
+  | None, None, false, _ ->
+      Ok
+        (Run
+           {
+             mode = output opts;
+             session_id = opts.session_id;
+             parent_id = opts.parent_id;
+             from_session = opts.from_session;
+             model_spec = opts.model_spec;
+             prompt_file = opts.prompt_file;
+             max_steps = opts.max_steps;
+             tools = opts.tools;
+             profile = opts.profile;
+             images = opts.images;
+             context = opts.context;
+             prompt = opts.prompt;
+           })
+
+let command_term =
   Term.(
     term_result ~usage:true
-      (const check_exclusive
+      (const command
       $ (const v $ set_arg $ list_arg $ limit_arg $ session_id_arg
        $ parent_id_arg $ from_session_arg $ handoff_arg $ model_arg
        $ prompt_file_arg $ max_steps_arg $ tools_arg $ profile_arg $ json_arg
        $ stream_arg $ image_arg $ context_arg $ prompt_arg)))
-
-(* The prompt run's output mode: the human transcript unless a flag asked for
-   one of the machine views. [--list]/[--set] keep using [json] directly. *)
-let output opts =
-  if opts.json then Json else if opts.stream then Stream else Human
 
 let man =
   [
@@ -418,4 +499,4 @@ let exits =
 let cmd run =
   let doc = "Opinionated one-shot agentic loop" in
   let info = Cmd.info "op" ~version:"0.2.0" ~doc ~man ~exits in
-  Cmd.v info Term.(const run $ opts)
+  Cmd.v info Term.(const run $ command_term)
