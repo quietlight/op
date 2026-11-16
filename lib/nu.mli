@@ -23,10 +23,21 @@ type modules = { names : string list; include_path : string }
     description) and the colon-separated [--include-path]. The gate rescans
     those directories and vets imported sources on every call. *)
 
-type plugins = { names : string list; registry : string; stub_dir : string }
+type plugin_command = { command : string; summary : string }
+(** [plugin_command] One plugin command and its one-line description, as the
+    plugin itself declares it (the standard nu plugin signature). *)
+
+type plugins = {
+  names : string list;
+  registry : string;
+  stub_dir : string;
+  commands : (string * plugin_command list) list;
+}
 (** [plugins] The loadable plugin names, the op-managed registry file for
-    [--plugin-config], and the directory holding the empty [env.nu]/[config.nu]
-    stubs that replace [--no-config-file]. *)
+    [--plugin-config], the directory holding the empty [env.nu]/[config.nu]
+    stubs that replace [--no-config-file], and each plugin's declared commands
+    (for the tool description; may be empty when the registry could not be
+    read). *)
 
 type error = Spawn_error of string | Timeout of float * string
 
@@ -78,6 +89,16 @@ val register_plugin :
     command signatures. Main calls this only for profile-listed plugins, and
     only when the registry is missing or older than the binary. *)
 
+val plugin_commands :
+  proc_mgr:_ Eio.Process.mgr ->
+  clock:_ Eio.Time.clock ->
+  executable:string ->
+  registry:string ->
+  ((string * plugin_command list) list, string) result
+(** [plugin_commands ~proc_mgr ~clock ~executable ~registry] reads each
+    registered plugin's commands and descriptions from [registry] via nu's
+    [plugin list]. It reads the registry file only; no plugin binary runs. *)
+
 val tool :
   proc_mgr:_ Eio.Process.mgr ->
   clock:_ Eio.Time.clock ->
@@ -102,4 +123,9 @@ module For_testing : sig
       then [overrides] appended as [NAME=VALUE]. No name appears twice, so
       execve's unspecified duplicate-entry handling — nu takes the last, C
       getenv the first — never decides which value the child sees. *)
+
+  val plugin_note : plugins option -> string
+  (** [plugin_note plugins] is the tool-description paragraph naming each
+      plugin, how to load it, its main command's description and its subcommands
+      (a count plus a [help] pointer for large plugins). *)
 end

@@ -55,6 +55,7 @@ let test_nu_plugin_config_table_is_borderless () =
           names = [ "test" ];
           registry = Filename.concat stub_dir "plugins.msgpackz";
           stub_dir;
+          commands = [];
         }
       in
       match run ~plugins {|[{alpha: 42}]|} with
@@ -236,9 +237,54 @@ let test_env_with_replaces_not_appends () =
     [ "OP_AST_FILE=/tmp/INTENDED" ]
     entries
 
+let contains_sub s sub =
+  let n = String.length sub in
+  let rec go i =
+    i + n <= String.length s && (String.sub s i n = sub || go (i + 1))
+  in
+  go 0
+
+let test_plugin_note_describes_commands () =
+  let cmd command summary = { Op.Nu.command; summary } in
+  let many =
+    List.init 12 (fun i -> cmd (Fmt.str "big c%d" i) "a big command")
+  in
+  let plugins : Op.Nu.plugins =
+    {
+      names = [ "jev"; "big"; "bare" ];
+      registry = "unused";
+      stub_dir = "unused";
+      commands =
+        [
+          ( "jev",
+            [
+              cmd "jev" "Ask Jev typed questions.";
+              cmd "jev noul" "Probability of yes.";
+              cmd "jev choice" "Pick one.";
+            ] );
+          ("big", cmd "big" "Lots of commands." :: many);
+        ];
+    }
+  in
+  let note = Op.Nu.For_testing.plugin_note (Some plugins) in
+  let has name sub = Alcotest.(check bool) name true (contains_sub note sub) in
+  has "how to load" "bare `plugin use <name>`";
+  has "points at help" "`help <command>`";
+  has "main description" "- jev: Ask Jev typed questions.";
+  has "subcommand with summary" "\n  - `jev noul`: Probability of yes.";
+  has "every small-plugin subcommand" "\n  - `jev choice`: Pick one.";
+  has "large plugin counted" "- big: Lots of commands. 12 commands; `help big`";
+  has "plugin with no catalog still named" "- bare:";
+  Alcotest.(check string)
+    "no plugins, no note" ""
+    (Op.Nu.For_testing.plugin_note None)
+
 let suite =
   ( "nu",
     [
+      ( "nu plugin note describes commands",
+        `Quick,
+        test_plugin_note_describes_commands );
       ("nu print", `Quick, test_nu_print);
       ( "nu env_with replaces not appends",
         `Quick,

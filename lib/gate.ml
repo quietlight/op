@@ -100,7 +100,7 @@ let path_verdict ~cwd raw =
    runs it through [/bin/sh] itself. *)
 let sensitive_path_re =
   Re.Perl.compile_pat ~opts:[ `Caseless ]
-    {|(\.ssh\b|id_(rsa|dsa|ecdsa|ed25519)|\.aws/credentials|\.netrc\b|\.gnupg\b|\.env\b|\.op_global/agent/models|\.pem\b|\.kube/config|\.docker/config|\.npmrc\b|\.git-credentials\b|\.config/gh\b|\.pgpass\b|\.config/gcloud\b|\.config/himalaya\b|terraform\.tfstate|\.[a-z_]*history\b)|}
+    {|(\.ssh\b|id_(rsa|dsa|ecdsa|ed25519)|\.aws/credentials|\.netrc\b|\.gnupg\b|\.env\b|\.op_global/agent/models|\.pem\b|\.kube/config|\.docker/config|\.npmrc\b|\.git-credentials\b|\.config/gh\b|\.pgpass\b|\.config/gcloud\b|\.config/himalaya\b|\.config/typesafe\b|terraform\.tfstate|\.[a-z_]*history\b)|}
 
 (* Commands the deterministic rules can't clear are adjudicated by the judge.
    With no judge configured we fail closed; a judge that raises is likewise

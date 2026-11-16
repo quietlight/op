@@ -11,7 +11,15 @@ let default_timeout = 120.0
 let max_output_bytes = 30_000
 
 type modules = { names : string list; include_path : string }
-type plugins = { names : string list; registry : string; stub_dir : string }
+type plugin_command = { command : string; summary : string }
+
+type plugins = {
+  names : string list;
+  registry : string;
+  stub_dir : string;
+  commands : (string * plugin_command list) list;
+}
+
 type error = Spawn_error of string | Timeout of float * string
 
 (* The flags shared by the run and AST invocations, so the parser state the
@@ -211,6 +219,96 @@ let register_plugin ~proc_mgr ~clock ~executable ~registry ~binary =
   | Error `Timeout -> err "plugin add %s timed out" binary
   | Error (`Spawn msg) -> err "plugin add %s: %s" binary msg
 
+(* [plugin list] output: [{name, commands: [{name, description}]}]. Entries
+   that do not have that shape are skipped rather than failing the run: the
+   catalog only feeds the tool description. *)
+let command_of_json = function
+  | `Assoc fields -> (
+      match
+        (List.assoc_opt "name" fields, List.assoc_opt "description" fields)
+      with
+      | Some (`String command), Some (`String summary) ->
+          Some { command; summary }
+      | Some (`String command), _ -> Some { command; summary = "" }
+      | _ -> None)
+  | _ -> None
+
+let plugin_of_json = function
+  | `Assoc fields -> (
+      match
+        (List.assoc_opt "name" fields, List.assoc_opt "commands" fields)
+      with
+      | Some (`String name), Some (`List commands) ->
+          Some (name, List.filter_map command_of_json commands)
+      | _ -> None)
+  | _ -> None
+
+(* Read the registry's catalog. [plugin list] decodes the registry file; it
+   does not run any plugin binary. Path via the environment, as in [ast]. *)
+let plugin_commands ~proc_mgr ~clock ~executable ~registry =
+  let out = Buffer.create 4096 and errbuf = Buffer.create 256 in
+  let command =
+    {|plugin list --plugin-config $env.OP_PLUGIN_REGISTRY | select name commands | to json --raw|}
+  in
+  match
+    spawn_capture ~proc_mgr ~clock ~timeout:ast_timeout
+      ~env:(env_with [ ("OP_PLUGIN_REGISTRY", registry) ])
+      ~executable ~stdout:(Eio.Flow.buffer_sink out)
+      ~stderr:(Eio.Flow.buffer_sink errbuf)
+      [ "nu"; "--no-config-file"; "-c"; command ]
+  with
+  | Ok (`Exited 0) -> (
+      match Yojson.Safe.from_string (Buffer.contents out) with
+      | `List plugins -> Ok (List.filter_map plugin_of_json plugins)
+      | _ -> err "plugin list: expected a JSON list"
+      | exception Yojson.Json_error msg ->
+          err "plugin list: invalid JSON: %s" msg)
+  | Ok _ -> err "plugin list failed: %s" (String.trim (Buffer.contents errbuf))
+  | Error `Timeout -> err "plugin list timed out"
+  | Error (`Spawn msg) -> err "plugin list: %s" msg
+
+(* Subcommands are listed with their summaries up to this many, so the model
+   can pick the right one without a [help] round trip; past it (polars has
+   ~200) the note gives a count and points at [help <plugin>]. *)
+let max_listed_commands = 8
+
+(* One plugin's line: its main command's description (the command named
+   after the plugin, when there is one) and its other commands. *)
+let plugin_line ~commands name =
+  let cmds = Option.value ~default:[] (List.assoc_opt name commands) in
+  let main, rest = List.partition (fun c -> c.command = name) cmds in
+  let summary =
+    match main with
+    | { summary; _ } :: _ when summary <> "" -> " " ^ summary
+    | _ -> ""
+  in
+  let names = List.map (fun c -> c.command) rest in
+  let entry c =
+    if c.summary = "" then Fmt.str "\n  - `%s`" c.command
+    else Fmt.str "\n  - `%s`: %s" c.command c.summary
+  in
+  let listing =
+    match names with
+    | [] -> ""
+    | names when List.length names <= max_listed_commands ->
+        String.concat "" (List.map entry rest)
+    | names when main <> [] ->
+        Fmt.str " %d commands; `help %s` lists them." (List.length names) name
+    | names ->
+        Fmt.str " %d commands, e.g. %s." (List.length names)
+          (String.concat ", " (List.filteri (fun i _ -> i < 4) names))
+  in
+  Fmt.str "\n- %s:%s%s" name summary listing
+
+let plugin_note = function
+  | None | Some { names = []; _ } -> ""
+  | Some p ->
+      Fmt.str
+        " Plugins (load one with a bare `plugin use <name>`; other `plugin` \
+         subcommands are denied; once loaded, `help <command>` shows its flags \
+         and examples):%s"
+        (String.concat "" (List.map (plugin_line ~commands:p.commands) p.names))
+
 let description ~externals ~(modules : modules option)
     ~(plugins : plugins option) =
   let allowed =
@@ -231,16 +329,6 @@ let description ~externals ~(modules : modules option)
            from disk (%s)."
           m.include_path current
   in
-  let plugin_note =
-    match plugins with
-    | None | Some { names = []; _ } -> ""
-    | Some p ->
-        Fmt.str
-          " Plugins available: %s -- load with `plugin use %s` (other `plugin` \
-           subcommands are denied)."
-          (String.concat ", " p.names)
-          (List.hd p.names)
-  in
   Fmt.str
     "Run a Nushell (v0.114) script; returns combined stdout+stderr and the \
      exit code. Raw Nushell source, not bash -- write real pipelines. #1 \
@@ -254,9 +342,9 @@ let description ~externals ~(modules : modules option)
      script or module without running it (the `path expand` is required: bare \
      relative paths resolve against the temp dir the script runs from). The \
      active profile is introspectable via $env.OP_NU_PROFILE, \
-     $env.OP_NU_EXTERNALS, and $env.OP_NU_MODULES (comma-separated).%s%s Full \
-     playbook: read ./skills/practical-nu.md at the project root."
-    allowed module_note plugin_note
+     $env.OP_NU_EXTERNALS, and $env.OP_NU_MODULES (comma-separated).%s Full \
+     playbook: read ./skills/practical-nu.md at the project root.%s"
+    allowed module_note (plugin_note plugins)
 
 let tool ~proc_mgr ~clock ?modules ?plugins ~env ~executable ~externals () :
     Tool.t =
@@ -307,4 +395,5 @@ let tool ~proc_mgr ~clock ?modules ?plugins ~env ~executable ~externals () :
 
 module For_testing = struct
   let env_with = env_with
+  let plugin_note = plugin_note
 end

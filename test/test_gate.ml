@@ -117,6 +117,7 @@ let test_sensitive_paths_match () =
   hits "stored git credentials" "open ~/.git-credentials";
   hits "gh token store" "open ~/.config/gh/hosts.yml";
   hits "himalaya mail config" "open ~/.config/himalaya/config.toml";
+  hits "typesafe api key (nu_plugin_jev)" "open ~/.config/typesafe/api_key";
   hits "zsh history" "open ~/.zsh_history";
   hits "bash history" "open ~/.bash_history";
   hits "psql history" "open ~/.psql_history"
@@ -130,6 +131,7 @@ let test_sensitive_path_near_misses () =
   misses "ordinary read" "open README.md";
   misses "ghostty config is not gh" "open ~/.config/ghostty/config";
   misses "himalayan is not himalaya" "open ~/.config/himalayan/notes";
+  misses "typesafety is not typesafe" "open ~/.config/typesafety/x";
   misses "history.md is not a history file" "open docs/history.md";
   misses "undotted npmrc mention" "grep npmrc README.md"
 

@@ -304,6 +304,15 @@ let ensure_stub_dir agent_dir =
     [ "env.nu"; "config.nu" ];
   stub_dir
 
+(* The plugins' own declared commands, for the tool description; when the
+   registry cannot be read the description falls back to bare names. *)
+let plugin_catalog ~proc_mgr ~clock ~executable ~registry =
+  match Op.Nu.plugin_commands ~proc_mgr ~clock ~executable ~registry with
+  | Ok commands -> commands
+  | Error msg ->
+      warn_plugins "%s" msg;
+      []
+
 (* Resolve [nu_plugin_<name>] binaries and (re)build the op-managed plugin
    registry when it is missing or older than a binary. [plugin add] executes
    the binary, so only profile-listed plugins ever run. Unresolvable or
@@ -365,7 +374,11 @@ let setup_plugins ~proc_mgr ~clock ~executable ~host_path names =
       in
       match registered with
       | [] -> None
-      | names -> Some { Op.Nu.names; registry; stub_dir })
+      | names ->
+          let commands =
+            plugin_catalog ~proc_mgr ~clock ~executable ~registry
+          in
+          Some { Op.Nu.names; registry; stub_dir; commands })
 
 (* Build the nu tool and its gate context, or warn and return [None] when nu
    itself is not installed (the tool is then simply absent from the run). The
