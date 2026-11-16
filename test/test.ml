@@ -9,6 +9,7 @@ let () =
       Test_write.suite;
       Test_edit.suite;
       Test_nu.suite;
+      Test_nu_sandbox.suite;
       Test_glob.suite;
       Test_context.suite;
       Test_agent.suite;

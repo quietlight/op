@@ -107,349 +107,27 @@ let resolve_prompt ~(fail : string -> 'a) ~resuming ~prompt_file ~prompt =
   | Ok p -> p
   | Error e -> fail (Op.Prompt.message ~file_path:prompt_file ~resuming e)
 
-(* The context the nu gate needs, carried out of tool construction: the AST
-   closure, toolbox allowlist, per-call module scanner, and plugin names. *)
-type nu_ctx = {
-  ast : string -> (Yojson.Safe.t, string) result;
-  externals : string list;
-  scan_modules : unit -> (string * string) list;
-  plugins : string list;
-}
+let warn msg = Fmt.epr "warning: %s@." msg
 
-(* First hit for [name] on the [Util.path_list_sep]-separated [path] (a small [which] walk).
-   Requires an executable regular file, as a real [which] does: [Sys.file_exists]
-   alone also matches a *directory* named e.g. "nu", which would then be
-   symlinked into the toolbox as if it were the tool, or handed to
-   [register_plugin] to execute. Follows symlinks ([Unix.stat], not [lstat]) —
-   a PATH entry that is a symlink to the real binary is the normal case. *)
-let which ~path name =
-  let is_executable_file candidate =
-    match Unix.stat candidate with
-    | { Unix.st_kind = Unix.S_REG; _ } -> (
-        try
-          Unix.access candidate [ Unix.X_OK ];
-          true
-        with Unix.Unix_error _ -> false)
-    | _ | (exception Unix.Unix_error _) -> false
-  in
-  String.split_on_char Op.Util.path_list_sep.[0] path
-  |> List.find_map (fun dir ->
-      if dir = "" then None
-      else
-        let candidate = Filename.concat dir name in
-        if is_executable_file candidate then Some candidate else None)
-
-(* Remove the toolbox temp dir and its symlinks. op is one-shot, so this runs
-   at process exit; best-effort, since a leaked temp dir must never abort a run. *)
-let cleanup_toolbox dir =
-  (try
-     Sys.readdir dir
-     |> Array.iter (fun name ->
-         try Sys.remove (Filename.concat dir name) with Sys_error _ -> ())
-   with Sys_error _ -> ());
-  try Unix.rmdir dir with Unix.Unix_error _ -> ()
-
-(* Build the per-run toolbox: a fresh temp dir of symlinks to each allowed
-   external, resolved against the host [path]. Names not found are skipped with
-   a stderr warning (a nu script naming a missing external will simply fail at
-   runtime). The dir is the nu process's entire PATH, cleaned up at exit. *)
-let build_toolbox ~path ~externals =
-  let dir = Filename.temp_file "op-toolbox" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
-  at_exit (fun () -> cleanup_toolbox dir);
-  List.iter
-    (fun name ->
-      match which ~path name with
-      | Some target -> (
-          try Unix.symlink target (Filename.concat dir name)
-          with Unix.Unix_error (e, _, _) ->
-            Fmt.epr "warning: nu toolbox: cannot link %s: %s@." name
-              (Unix.error_message e))
-      | None ->
-          Fmt.epr
-            "warning: nu toolbox: external %s not found on PATH; skipping@."
-            name)
-    externals;
-  dir
-
-let expand_home path =
-  if String.starts_with ~prefix:"~/" path then
-    match Op.Util.home_dir () with
-    | Some home ->
-        Filename.concat home (String.sub path 2 (String.length path - 2))
-    | None -> path
-  else path
-
-(* Expand every configured module dir for nu's include path. Missing dirs are
-   warned once but retained: an agent may create the dir and a module mid-run. *)
-let module_include_path dirs =
-  match List.map expand_home dirs with
-  | [] -> None
-  | dirs ->
-      List.iter
-        (fun d ->
-          if not (Sys.file_exists d && Sys.is_directory d) then
-            Fmt.epr
-              "warning: nu modules: %s is not a directory yet; keeping it in \
-               the include path@."
-              d)
-        dirs;
-      Some (dirs, String.concat Op.Util.path_list_sep dirs)
-
-(* Build a scanner that re-reads [*.nu] files on each call. Missing dirs are
-   silently skipped after the startup warning; first dir wins name collisions,
-   mirroring PATH. Dot-prefixed modules retain the existing behavior. *)
-let scan_module_sources dirs () =
-  let read_dir dir =
-    if not (Sys.file_exists dir && Sys.is_directory dir) then []
-    else
-      Sys.readdir dir |> Array.to_list |> List.sort String.compare
-      |> List.filter_map (fun name ->
-          if not (Filename.check_suffix name ".nu") then None
-          else
-            let path = Filename.concat dir name in
-            (* Cap the read: module dirs are writable by the nu tool alone, so a
-               runaway run can drop a huge .nu file that would otherwise be read
-               in full on every gate call (memory), and fed to `nu ast`. Skip an
-               oversized file before reading it; it becomes un-importable (a
-               clean "module not found" deny) rather than an amplifier. *)
-            let oversized =
-              match Unix.stat path with
-              | { st_size; _ } -> st_size > Op.Gate_nu.max_script_chars
-              | exception Unix.Unix_error _ -> false
-            in
-            if oversized then (
-              Fmt.epr
-                "warning: nu modules: %s skipped (larger than the %d-byte \
-                 module cap)@."
-                path Op.Gate_nu.max_script_chars;
-              None)
-            else
-              match Op.Util.read_file path with
-              | Ok source -> Some (name, source)
-              | Error msg ->
-                  Fmt.epr "warning: nu modules: cannot read %s: %s@." path msg;
-                  None)
-  in
-  List.concat_map read_dir dirs
-  |> List.fold_left
-       (fun acc (name, src) ->
-         if List.mem_assoc name acc then acc else (name, src) :: acc)
-       []
-  |> List.rev
-
-(* The names every profile inherits: locale, home and temp dir — enough for a
-   script (and the build drivers a [pathMode: host] profile allows) to behave
-   normally, and nothing that carries a credential. Anything else a profile
-   needs is named in its [envAllow]. *)
-let base_env_allow =
-  [ "HOME"; "USER"; "LOGNAME"; "LANG"; "LC_ALL"; "TERM"; "TMPDIR"; "TZ" ]
-
-(* The nu child's environment: an *allowlist* of the host env — [base_env_allow]
-   plus the profile's [envAllow] — with PATH replaced by [child_path] (the
-   toolbox dir, or toolbox:host for a [pathMode: host] profile), plus the
-   OP_HOST_PATH handshake (so a nested op restores its real PATH), an
-   incremented OP_DEPTH (so op->nu->op recursion is bounded), and the
-   OP_NU_PROFILE / OP_NU_EXTERNALS / OP_NU_MODULES introspection vars so a
-   script can see which profile it runs under and what that profile grants.
-
-   Allowlist, not deny-list: reading [$env] needs no external command and names
-   no sensitive path, so neither gate layer fires on it — an inherited
-   ANTHROPIC_API_KEY or SSH_AUTH_SOCK would be one clean-verdict line of nu away
-   from the tool result, and thence the model and the provider. A name-pattern
-   blocklist would fail open on the next variable someone invents; the set a
-   sandboxed script legitimately needs is small enough to enumerate. *)
-let nu_child_env ~child_path ~host_path ~depth ~profile_name ~externals
-    ~module_names ~env_allow =
-  let allowed = base_env_allow @ env_allow in
-  (* Split at '=' rather than matching a "NAME=" prefix, so HOME admits HOME
-     alone and not HOMEBREW_PREFIX. The OP_* / PATH entries appended below need
-     no exclusion here: an allowlist cannot admit them in the first place. *)
-  let inherited =
-    Unix.environment () |> Array.to_list
-    |> List.filter (fun kv ->
-        match String.index_opt kv '=' with
-        | None -> false
-        | Some i -> List.mem (String.sub kv 0 i) allowed)
-  in
-  Array.of_list
-    (inherited
-    @ [
-        "PATH=" ^ child_path;
-        "OP_HOST_PATH=" ^ host_path;
-        Fmt.str "OP_DEPTH=%d" depth;
-        "OP_NU_PROFILE=" ^ profile_name;
-        "OP_NU_EXTERNALS=" ^ String.concat "," externals;
-        "OP_NU_MODULES=" ^ String.concat "," module_names;
-      ])
-
-let warn_plugins fmt = Fmt.kstr (Fmt.epr "warning: nu plugins: %s@.") fmt
-
-(* Ensure the empty env/config stubs that replace [--no-config-file] (which
-   hard-disables the plugin registry in nu 0.114); returns the stub dir. *)
-let ensure_stub_dir agent_dir =
-  let stub_dir = Filename.concat agent_dir "nu-stubs" in
-  (try Unix.mkdir stub_dir 0o700
-   with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  List.iter
-    (fun f ->
-      let p = Filename.concat stub_dir f in
-      if not (Sys.file_exists p) then Out_channel.with_open_bin p (fun _ -> ()))
-    [ "env.nu"; "config.nu" ];
-  stub_dir
-
-(* The plugins' own declared commands, for the tool description; when the
-   registry cannot be read the description falls back to bare names. *)
-let plugin_catalog ~proc_mgr ~clock ~executable ~registry =
-  match Op.Nu.plugin_commands ~proc_mgr ~clock ~executable ~registry with
-  | Ok commands -> commands
-  | Error msg ->
-      warn_plugins "%s" msg;
-      []
-
-(* Resolve [nu_plugin_<name>] binaries and (re)build the op-managed plugin
-   registry when it is missing or older than a binary. [plugin add] executes
-   the binary, so only profile-listed plugins ever run. Unresolvable or
-   unregisterable plugins are warned and dropped, like missing externals. *)
-let setup_plugins ~proc_mgr ~clock ~executable ~host_path names =
-  let mtime path =
-    match Unix.stat path with
-    | st -> Some st.Unix.st_mtime
-    | exception Unix.Unix_error _ -> None
-  in
-  match (names, Op.Util.home_dir ()) with
-  | [], _ -> None
-  | _, None ->
-      warn_plugins "HOME not set; skipping";
-      None
-  | names, Some home -> (
-      let agent_dir = Filename.concat home ".op_global/agent" in
-      let stub_dir = ensure_stub_dir agent_dir in
-      let registry = Filename.concat agent_dir "nu-plugin.msgpackz" in
-      let resolved =
-        List.filter_map
-          (fun n ->
-            let bin = "nu_plugin_" ^ n in
-            match which ~path:host_path bin with
-            | Some b -> Some (n, b)
-            | None ->
-                warn_plugins "%s not found on PATH; skipping" bin;
-                None)
-          names
-      in
-      (* Stale when a plugin binary — or settings.json, where the plugin list
-         lives — is newer than the registry: a freshly listed plugin must
-         trigger a rebuild even though its binary predates the registry. *)
-      let stale =
-        match mtime registry with
-        | None -> resolved <> []
-        | Some t ->
-            let newer p =
-              match mtime p with Some pt -> pt > t | None -> false
-            in
-            newer (Filename.concat agent_dir "settings.json")
-            || List.exists (fun (_, b) -> newer b) resolved
-      in
-      let registered =
-        if not stale then List.map fst resolved
-        else (
-          (try Sys.remove registry with Sys_error _ -> ());
-          List.filter_map
-            (fun (n, binary) ->
-              match
-                Op.Nu.register_plugin ~proc_mgr ~clock ~executable ~registry
-                  ~binary
-              with
-              | Ok () -> Some n
-              | Error msg ->
-                  warn_plugins "%s" msg;
-                  None)
-            resolved)
-      in
-      match registered with
-      | [] -> None
-      | names ->
-          let commands =
-            plugin_catalog ~proc_mgr ~clock ~executable ~registry
-          in
-          Some { Op.Nu.names; registry; stub_dir; commands })
-
-(* Build the nu tool and its gate context, or warn and return [None] when nu
-   itself is not installed (the tool is then simply absent from the run). The
-   same fallback covers a backend with no process support (eio_windows raises
-   [Failure] from [process_mgr]): op still runs, without [nu]. *)
-let setup_nu ~env ~profile ~depth =
-  let proc_mgr =
-    try Some (Eio.Stdenv.process_mgr env) with Failure _ -> None
-  in
-  let clock = Eio.Stdenv.clock env in
-  let host_path = try Sys.getenv "PATH" with Not_found -> "" in
-  match (proc_mgr, which ~path:host_path "nu") with
-  | None, _ ->
-      Fmt.epr
-        "warning: nu tool requested but this platform cannot spawn processes; \
-         dropping it@.";
-      None
-  | _, None ->
-      Fmt.epr "warning: nu tool requested but nu is not on PATH; dropping it@.";
-      None
-  | Some proc_mgr, Some executable ->
-      let externals = profile.Op.Config.externals in
-      let module_path = module_include_path profile.Op.Config.module_dirs in
-      let module_dirs =
-        match module_path with Some (dirs, _) -> dirs | None -> []
-      in
-      let scan_modules = scan_module_sources module_dirs in
-      let startup_modules = scan_modules () in
-      let modules =
-        Option.map
-          (fun (_, include_path) ->
-            { Op.Nu.names = List.map fst startup_modules; include_path })
-          module_path
-      in
-      let plugins =
-        setup_plugins ~proc_mgr ~clock ~executable ~host_path
-          profile.Op.Config.plugins
-      in
-      let plugin_names =
-        match plugins with Some p -> p.Op.Nu.names | None -> []
-      in
-      let toolbox_dir = build_toolbox ~path:host_path ~externals in
-      (* Toolbox first either way, so the script's own externals resolve
-         through the vetted symlinks; Host appends the host PATH for the
-         subprocess tree (make -> gcc), which allowlisting the build drivers
-         already conceded. *)
-      let child_path =
-        match profile.Op.Config.path_mode with
-        | Op.Config.Toolbox -> toolbox_dir
-        | Op.Config.Host -> toolbox_dir ^ Op.Util.path_list_sep ^ host_path
-      in
-      let nu_env () =
-        nu_child_env ~child_path ~host_path ~depth:(depth + 1)
-          ~profile_name:profile.Op.Config.name ~externals
-          ~module_names:(List.map fst (scan_modules ()))
-          ~env_allow:profile.Op.Config.env_allow
-      in
-      let tool =
-        Op.Nu.tool ~proc_mgr ~clock
-          ?version:(Op.Nu.version ~proc_mgr ~clock ~executable)
-          ?modules ?plugins ~env:nu_env ~executable ~externals ()
-      in
-      let ast = Op.Nu.ast ~proc_mgr ~clock ?modules ?plugins ~executable in
-      Some (tool, { ast; externals; scan_modules; plugins = plugin_names })
-
-(* Build the selected tool set. [nu] is constructed only when requested and
-   additionally carries the gate context ([nu_ctx]) when built. *)
+(* Build the selected tool set. [nu] is constructed only when requested, and
+   brings its gate with it. A backend with no process support (eio_windows
+   raises [Failure] from [process_mgr]) drops the tool: op still runs, without
+   [nu]. *)
 let build_tools ~env ~profile ~tool_names ~depth =
-  let nu_tool, nu_ctx =
-    if List.mem "nu" tool_names then
-      match setup_nu ~env ~profile ~depth with
-      | Some (tool, ctx) -> (Some tool, Some ctx)
-      | None -> (None, None)
-    else (None, None)
+  let nu =
+    if not (List.mem "nu" tool_names) then None
+    else
+      match Eio.Stdenv.process_mgr env with
+      | proc_mgr ->
+          Op.Nu_sandbox.setup ~proc_mgr ~clock:(Eio.Stdenv.clock env) ~warn
+            ~profile ~depth
+      | exception Failure _ ->
+          warn
+            "nu tool requested but this platform cannot spawn processes; \
+             dropping it";
+          None
   in
-  (Op.Tools.select ~nu:nu_tool tool_names, nu_ctx)
+  (Op.Tools.select ~nu:(Option.map fst nu) tool_names, Option.map snd nu)
 
 let setup_call ~env ~tls ~provider ~api_key ~model ~max_tokens ~tools =
   let post =
@@ -550,18 +228,6 @@ let report_result ~(mode : Cli.output) ~session ~base ~window ~model
   | Cli.Human ->
       List.iter print_endline (Op.Render.footer (Lazy.force renderer) envelope)
   | Cli.Stream | Cli.Json -> print_endline (Yojson.Safe.to_string envelope)
-
-(* Assemble the run's gate: the nu AST verdict when a nu tool was built, and
-   the cwd-scoped path checks. *)
-let build_gate ~cwd ~nu_ctx =
-  let nu =
-    Option.map
-      (fun ctx ->
-        Op.Gate_nu.verdict ~ast:ctx.ast ~externals:ctx.externals
-          ~scan_modules:ctx.scan_modules ~plugins:ctx.plugins)
-      nu_ctx
-  in
-  Op.Gate.v ?nu ~cwd ()
 
 (* Per-event sink: session logging, plus the one warning the session lines
    cannot carry (repaired tool-call ids) on stderr. *)
@@ -671,11 +337,11 @@ let run_with_context ~env ~mode ~cwd ~config ~provider ~api_key ~model ~tls
     Op.Run_summary.branch_correction_metadata branch_correction
   in
   let emit = build_emit ~session ~provider ~model in
-  let tools, nu_ctx = build_tools ~env ~profile ~tool_names ~depth in
+  let tools, nu_gate = build_tools ~env ~profile ~tool_names ~depth in
   let call =
     setup_call ~env ~tls ~provider ~api_key ~model ~max_tokens ~tools
   in
-  let gate = build_gate ~cwd ~nu_ctx in
+  let gate = Op.Gate.v ?nu:nu_gate ~cwd () in
   Option.iter
     (fun s -> Op.Session.append_user s ~blocks:image_blocks ~text:prompt ())
     session;
