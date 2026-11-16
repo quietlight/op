@@ -12,12 +12,14 @@ let path_tc name p = tc ~args:(`Assoc [ ("path", `String p) ]) name
 
 let reason = function
   | Op.Gate.Allow -> ""
-  | Op.Gate.Warn s | Op.Gate.Deny s | Op.Gate.Code_red s -> s
+  | Op.Gate.Warn s | Op.Gate.Deny s | Op.Gate.Unparsed s | Op.Gate.Code_red s ->
+      s
 
 let tag = function
   | Op.Gate.Allow -> "allow"
   | Op.Gate.Warn _ -> "warn"
   | Op.Gate.Deny _ -> "deny"
+  | Op.Gate.Unparsed _ -> "unparsed"
   | Op.Gate.Code_red _ -> "code_red"
 
 let check_tag msg expected tcall =
@@ -131,6 +133,35 @@ let test_repeated_denies_escalate () =
     "third denied call escalates" "code_red"
     (tag (deny ()))
 
+(* A script that would not parse is blocked but is not a strike. Syntax slips
+   are routine (about half the runs escalation ever ended had one among their
+   three), so they must neither count toward it nor raise the flagged-call
+   reminder on the next clean call. *)
+let test_unparsed_is_not_a_strike () =
+  let next = ref Op.Gate.Allow in
+  let nu ~script:_ = !next in
+  let gate = Op.Gate.v ~nu ~cwd () in
+  let call verdict =
+    next := verdict;
+    tag
+      (Op.Gate.check gate (tc ~args:(`Assoc [ ("script", `String "x") ]) "nu"))
+  in
+  Alcotest.(check string) "deny" "deny" (call (Op.Gate.Deny "curl"));
+  Alcotest.(check string) "typo" "unparsed" (call (Op.Gate.Unparsed "typo"));
+  Alcotest.(check string) "typo" "unparsed" (call (Op.Gate.Unparsed "typo"));
+  Alcotest.(check string)
+    "a second real deny is still just a deny" "deny"
+    (call (Op.Gate.Deny "curl"));
+  let gate = Op.Gate.v ~nu ~cwd () in
+  let call verdict =
+    next := verdict;
+    tag
+      (Op.Gate.check gate (tc ~args:(`Assoc [ ("script", `String "x") ]) "nu"))
+  in
+  Alcotest.(check string) "typo" "unparsed" (call (Op.Gate.Unparsed "typo"));
+  Alcotest.(check string)
+    "no reminder after a typo" "allow" (call Op.Gate.Allow)
+
 (* --- nu dispatch, over the injected [?nu] closure --- *)
 
 let nu_tc s = tc ~args:(`Assoc [ ("script", `String s) ]) "nu"
@@ -192,6 +223,7 @@ let suite =
       ("sensitive path near misses", `Quick, test_sensitive_path_near_misses);
       ("warn fires once then rearms", `Quick, test_warn_fires_once_then_rearms);
       ("repeated denies escalate", `Quick, test_repeated_denies_escalate);
+      ("unparsed is not a strike", `Quick, test_unparsed_is_not_a_strike);
       ("nu without gate fails closed", `Quick, test_nu_no_gate_fails_closed);
       ("nu gate allows", `Quick, test_nu_gate_allows);
       ("nu gate denies and names", `Quick, test_nu_gate_denies_and_names);

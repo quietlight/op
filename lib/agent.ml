@@ -160,7 +160,7 @@ let gated_result ~tools ~emit ~verdict (tc : Llm.tool_call) =
     | Gate.Warn m ->
         let r = dispatch_tool ~tools tc in
         { r with Llm.content = r.content ^ "\n\n[gate] warning: " ^ m }
-    | Gate.Deny m ->
+    | Gate.Deny m | Gate.Unparsed m ->
         {
           Llm.id = tc.id;
           name = tc.name;

@@ -7,9 +7,9 @@
 
     This is the only renderer op maintains. [op --render] replays a finished
     session file, or a [--stream] piped in, through it, which is what [hop] does
-    for its live view. [nu_modules/pi-session-view.nu] is an earlier Nushell
-    renderer of the same layout, kept as an example of well-written nu and not
-    kept in step with this module.
+    for its live view. An earlier Nushell renderer of the same layout,
+    [pi-session-view.nu], lives outside this repository as an example of
+    well-written nu and is not kept in step with this module.
 
     The machine views are unaffected: [--stream] still emits the session's
     ndjson byte-identically (that is what [hop] reads) and [--json] still emits

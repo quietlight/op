@@ -56,6 +56,12 @@
     level. Covering modules removes an asymmetry; it does not make the check
     sound.
 
+    A script nu could not parse is refused as {!Gate.Unparsed} rather than
+    {!Gate.Deny}: blocked the same, but a syntax slip is not held against the
+    agent. A garbage token is usually exactly that, though it is also what an
+    undeclared computed external head flattens to; nothing unparsed ever runs,
+    so not counting it costs no safety.
+
     Every deny names the offending command and says what to do instead: the
     persona has no confirmation UI, so the message {e is} the steering. *)
 

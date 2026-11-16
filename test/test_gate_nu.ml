@@ -163,11 +163,13 @@ let tag = function
   | Op.Gate.Allow -> "allow"
   | Op.Gate.Warn _ -> "warn"
   | Op.Gate.Deny _ -> "deny"
+  | Op.Gate.Unparsed _ -> "unparsed"
   | Op.Gate.Code_red _ -> "code_red"
 
 let reason = function
   | Op.Gate.Allow -> ""
-  | Op.Gate.Warn s | Op.Gate.Deny s | Op.Gate.Code_red s -> s
+  | Op.Gate.Warn s | Op.Gate.Deny s | Op.Gate.Unparsed s | Op.Gate.Code_red s ->
+      s
 
 (* An [ast] closure serving a fixture regardless of the script text, so the
    verdict path can be exercised without nu. *)
@@ -190,9 +192,14 @@ let test_verdict_external_denies () =
     "names curl" true
     (Test_support.contains (reason v) "curl")
 
+(* A script nu cannot parse is blocked as Unparsed, not Deny: it never runs,
+   but a syntax slip is not a strike toward escalation. A garbage token — nu's
+   flatten of anything it could not classify — is the same case. *)
 let test_verdict_ast_failure_denies () =
+  let garbage = verdict ~ast:(ast_of "computed_external") ~script:"x" () in
+  Alcotest.(check string) "garbage token -> unparsed" "unparsed" (tag garbage);
   let v = verdict ~ast:ast_fails ~script:"bad (syntax" () in
-  Alcotest.(check string) "ast failure -> deny" "deny" (tag v);
+  Alcotest.(check string) "ast failure -> unparsed" "unparsed" (tag v);
   Alcotest.(check bool)
     "carries nu's error" true
     (Test_support.contains (reason v) "parse error")
@@ -430,7 +437,9 @@ let suite =
         test_empty_toolbox_denies_external );
       ("verdict clean allows", `Quick, test_verdict_clean_allows);
       ("verdict external denies", `Quick, test_verdict_external_denies);
-      ("verdict ast failure denies", `Quick, test_verdict_ast_failure_denies);
+      ( "verdict ast failure is unparsed",
+        `Quick,
+        test_verdict_ast_failure_denies );
       ("verdict too long denies", `Quick, test_verdict_too_long_denies);
       ( "verdict sensitive path denies",
         `Quick,

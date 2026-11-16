@@ -45,6 +45,12 @@ type verdict =
   | Deny of string
       (** do not run the tool; return an [is_error] result carrying the reason
       *)
+  | Unparsed of string
+      (** do not run the tool, exactly as {!Deny}: the nu script could not be
+          parsed, so the gate cannot vouch for it. But it is a syntax error, not
+          a reach for something blocked, so it is {e not} held against the
+          agent: it does not count toward the repeated-denial escalation and
+          raises no flagged-call reminder. *)
   | Code_red of string
       (** kill the run: answer every pending call with an error and stop *)
 

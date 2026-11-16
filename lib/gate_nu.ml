@@ -49,7 +49,22 @@ let string_member key json =
    "http get") and [shape] (nu's classification, e.g. "shape_external"). *)
 let token_content t = string_member "content" t
 let token_shape t = string_member "shape" t
-let err_deny fmt = Fmt.kstr (fun s -> Error s) fmt
+
+(* Why a script was refused. The two are kept apart because the gate treats
+   them differently downstream: a [Policy] refusal is the agent reaching for
+   something the profile does not grant, a [Syntax] one is a script nu could
+   not parse — blocked all the same, but not counted against the agent (see
+   {!Gate.Unparsed}). *)
+type refusal = Policy of string | Syntax of string
+
+let refusal_message = function Policy s | Syntax s -> s
+
+let map_refusal f = function
+  | Policy s -> Policy (f s)
+  | Syntax s -> Syntax (f s)
+
+let err_deny fmt = Fmt.kstr (fun s -> Error (Policy s)) fmt
+let err_syntax fmt = Fmt.kstr (fun s -> Error (Syntax s)) fmt
 
 (* The classic Unix text-tool reflexes, mapped to their nu-builtin
    translations. The deny is the teachable moment: a model reaching for grep
@@ -237,7 +252,7 @@ let rec walk ~externals ~modules ~plugins = function
               | Some c when c <> "" -> Fmt.str " near `%s`" c
               | _ -> ""
             in
-            err_deny
+            err_syntax
               "the gate could not parse part of this script%s. That is usually \
                a Nushell syntax error (a hyphenated variable/parameter name — \
                nu wants snake_case, a stray `$` on a custom-command call, an \
@@ -298,12 +313,17 @@ let check_handshake_writes tokens =
   in
   go None tokens
 
-let analyze_ast ~externals ~modules ~plugins ast =
+let analyze_tokens ~externals ~modules ~plugins ast =
   match ast with
   | `List tokens ->
       let* () = check_handshake_writes tokens in
       walk ~externals ~modules ~plugins tokens
   | _ -> Ok ()
+
+(* The published form: one reason string, whichever kind of refusal it was. *)
+let analyze_ast ~externals ~modules ~plugins ast =
+  Result.map_error refusal_message
+    (analyze_tokens ~externals ~modules ~plugins ast)
 
 (* The vetted-module names a clean token stream imports, for the vetting
    recursion. Only names the walk already allowed can appear (anything else was
@@ -367,12 +387,12 @@ let analyze_source ~ast ~externals ~modules ~plugins text =
   let* () = check_computed_head text in
   match ast text with
   | Error e ->
-      err_deny
+      err_syntax
         "could not obtain a Nushell AST for the script (%s); fix the syntax \
          and retry"
         e
   | Ok json ->
-      let* () = analyze_ast ~externals ~modules ~plugins json in
+      let* () = analyze_tokens ~externals ~modules ~plugins json in
       Ok (used_modules ~modules json)
 
 (* Layer 2 is a hard deny. There is no second opinion to ask and no
@@ -410,7 +430,7 @@ let sensitive_verdict ~in_script ~sensitive_modules =
    the top level made the verdict depend on *where* a line of nu was written
    rather than what it did. *)
 let vet_modules ~analyze ~modules names =
-  let cache : (string, (unit, string) result) Hashtbl.t = Hashtbl.create 8 in
+  let cache : (string, (unit, refusal) result) Hashtbl.t = Hashtbl.create 8 in
   let sensitive = ref [] in
   let rec vet_all names =
     List.fold_left
@@ -448,7 +468,7 @@ let vet_modules ~analyze ~modules names =
                 (fun hit -> sensitive := !sensitive @ [ (name, hit) ])
                 (sensitive_match source);
               Result.map_error
-                (fun e -> Fmt.str "vetting module `%s` failed: %s" name e)
+                (map_refusal (Fmt.str "vetting module `%s` failed: %s" name))
                 (let* uses = analyze source in
                  vet_all uses)
         in
@@ -459,6 +479,10 @@ let vet_modules ~analyze ~modules names =
      [sensitive] before [vet_all] has populated it. *)
   let result = vet_all names in
   (result, !sensitive)
+
+let verdict_of_refusal = function
+  | Policy reason -> Gate.Deny reason
+  | Syntax reason -> Gate.Unparsed reason
 
 let verdict ~ast ~externals ~scan_modules ~plugins =
  fun ~script ->
@@ -474,11 +498,11 @@ let verdict ~ast ~externals ~scan_modules ~plugins =
       analyze_source ~ast ~externals ~modules:module_names ~plugins
     in
     match analyze script with
-    | Error reason -> Gate.Deny reason
+    | Error refusal -> verdict_of_refusal refusal
     | Ok uses -> (
         let result, sensitive_modules = vet_modules ~analyze ~modules uses in
         match result with
-        | Error reason -> Gate.Deny reason
+        | Error refusal -> verdict_of_refusal refusal
         | Ok () ->
             sensitive_verdict ~in_script:(sensitive_match script)
               ~sensitive_modules)

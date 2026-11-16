@@ -6,9 +6,9 @@
     land on.
 
     This is the one renderer: a run's own stdout, a replayed session file and
-    hop's live view all come through it (the last two via [op --render]).
-    [nu_modules/pi-session-view.nu] is an earlier Nushell renderer of the same
-    layout, kept as example nu and not kept in step.
+    hop's live view all come through it (the last two via [op --render]). An
+    earlier Nushell renderer of the same layout, [pi-session-view.nu], lives
+    outside this repository as example nu and is not kept in step.
 
     Stateful only because a [toolResult] entry names its call by id and nothing
     else: to say which file a [read] result came from, the renderer has to

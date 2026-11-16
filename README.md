@@ -253,16 +253,12 @@ any run that uses the `nu` tool.
 
 ## hop
 
-[nu_modules/hop.nu](nu_modules/hop.nu) is an interactive front end written in
-Nushell. It threads each run's session id into the next call, renders turns
-live by piping `--stream` into `op --render`, offers `@file` context completion, and drives the
-handoff flow from an editor. op stays a one-shot primitive; hop is where the
-back-and-forth lives.
-
-```
-use ~/path/to/op/nu_modules/hop.nu
-hop --context CLAUDE.md
-```
+hop is an interactive front end written in Nushell, kept outside this
+repository. It threads each run's session id into the next call, renders turns
+live by piping `--stream` into `op --render`, offers `@file` context
+completion, and drives the handoff flow from an editor. op stays a one-shot
+primitive; hop is where the back-and-forth lives, and everything it does goes
+through the flags documented here.
 
 ## Developing
 

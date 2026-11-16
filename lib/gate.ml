@@ -2,7 +2,13 @@
    calls, with nu scripts delegated to the injected static AST gate; see
    gate.mli for the philosophy and residual gaps. No I/O of its own. *)
 
-type verdict = Allow | Warn of string | Deny of string | Code_red of string
+type verdict =
+  | Allow
+  | Warn of string
+  | Deny of string
+  | Unparsed of string
+  | Code_red of string
+
 type nu_gate = script:string -> verdict
 
 (* Internal config, deliberately not user-facing. *)
@@ -36,10 +42,14 @@ let keep_last n xs =
     in
     drop (len - n) xs
 
-(* The reason to cite back to the model in a one-shot reminder. *)
+(* The reason to cite back to the model in a one-shot reminder, and so only for
+   verdicts that say the agent reached for something it may not have. An
+   [Unparsed] script is a typo, already explained in its own result; reminding
+   the model that "a recent call was flagged" teaches it to avoid a command
+   nobody objected to. *)
 let reason_of = function
   | Warn r | Deny r | Code_red r -> Some r
-  | Allow -> None
+  | Unparsed _ | Allow -> None
 
 (* --- paths ------------------------------------------------------------ *)
 
@@ -132,6 +142,10 @@ let combine ~recent ~base =
          recent)
   in
   match base with
+  (* Only [Deny] is counted, on both sides. Escalation exists to stop an agent
+     leaning on the gate; a script that would not parse is a syntax slip, and
+     in the session history about half the runs this rule ended had one of
+     those among their three strikes. *)
   | Deny _ when denies >= 2 -> Code_red "repeatedly attempting blocked actions"
   | Allow -> (
       let pending e = if e.reminded then None else reason_of e.verdict in
