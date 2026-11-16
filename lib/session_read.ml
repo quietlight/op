@@ -330,16 +330,13 @@ let resolve_branch_point ~path ~leaf =
     else
       match Hashtbl.find_opt by_id id with
       | None -> err_leaf_not_found id
-      | Some entry ->
-          if is_incomplete_branch_point entry then
-            match U.member "parentId" entry with
-            | `String pid -> (
-                match Hashtbl.find_opt by_id pid with
-                | Some _ -> walk ~fuel:(fuel - 1) pid
-                | None -> err_parent_not_found pid)
-            | `Null -> Ok (id, id <> leaf)
-            | _ -> Ok (id, id <> leaf)
-          else Ok (id, id <> leaf)
+      | Some entry when not (is_incomplete_branch_point entry) ->
+          Ok (id, id <> leaf)
+      | Some entry -> (
+          match U.member "parentId" entry with
+          | `String pid when Hashtbl.mem by_id pid -> walk ~fuel:(fuel - 1) pid
+          | `String pid -> err_parent_not_found pid
+          | _ -> Ok (id, id <> leaf))
   in
   walk ~fuel:(List.length entries) leaf
 

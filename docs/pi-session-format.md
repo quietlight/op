@@ -209,6 +209,6 @@ Shape: header (`parentSession` points at the run's main session file) →
 This is an audit trail wearing session clothes: consecutive judge calls are
 independent conversations, not multi-turn history, so resuming a gate log is
 meaningless and `op --list` deliberately ignores these files. Browse them raw
-or with `nu_modules/pi-session-viewer`. The intended uses are tracking down
+or with `nu_modules/pi-session-view.nu`. The intended uses are tracking down
 judge errors and miss-allows, and spotting commands that recur often enough to
 deserve a deterministic allowlist entry.

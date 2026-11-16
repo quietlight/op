@@ -51,7 +51,8 @@ let json_slice s =
    an intended allow that arrived as a strike against the agent. *)
 let parse_verdict text =
   match Yojson.Safe.from_string (json_slice text) with
-  | exception _ -> Gate.Fault "gate judge returned unparseable output"
+  | exception Yojson.Json_error _ ->
+      Gate.Fault "gate judge returned unparseable output"
   | json -> (
       let reason =
         match Yojson.Safe.Util.member "reason" json with

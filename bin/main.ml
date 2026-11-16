@@ -222,7 +222,7 @@ let scan_module_sources dirs () =
             let oversized =
               match Unix.stat path with
               | { st_size; _ } -> st_size > Op.Gate_nu.max_script_chars
-              | exception _ -> false
+              | exception Unix.Unix_error _ -> false
             in
             if oversized then (
               Fmt.epr

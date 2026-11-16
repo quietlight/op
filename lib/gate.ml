@@ -113,9 +113,18 @@ let adjudicate ~judge ~window ~command reason =
         (fun s -> Deny s)
         "%s and no gate judge is configured/reachable" reason
   | Some j -> (
-      match j ~window ~command ~reason with
-      | verdict -> verdict
-      | exception exn -> Deny ("gate judge raised: " ^ Printexc.to_string exn))
+      (* Cancellation is not the judge's failure: let it unwind the fiber
+         rather than turn into a Deny. Anything else the judge raises is
+         carried out as data and fails closed. *)
+      let judged =
+        match j ~window ~command ~reason with
+        | verdict -> Ok verdict
+        | exception (Eio.Cancel.Cancelled _ as e) -> raise e
+        | exception exn -> Error exn
+      in
+      match judged with
+      | Ok verdict -> verdict
+      | Error exn -> Deny ("gate judge raised: " ^ Printexc.to_string exn))
 
 (* --- dispatch + window ------------------------------------------------ *)
 

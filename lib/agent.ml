@@ -76,9 +76,16 @@ let dispatch_tool ~tools (tc : Llm.tool_call) : Llm.tool_result =
         details = None;
       }
   | Some t -> (
-      match t.run tc.arguments with
-      | exception (Eio.Cancel.Cancelled _ as e) -> raise e
-      | exception exn ->
+      (* A tool that raises becomes an error result the model can see, not a
+         dead run; cancellation still unwinds the fiber. *)
+      let ran =
+        match t.run tc.arguments with
+        | result -> Ok result
+        | exception (Eio.Cancel.Cancelled _ as e) -> raise e
+        | exception exn -> Error exn
+      in
+      match ran with
+      | Error exn ->
           {
             Llm.id = tc.id;
             name = tc.name;
@@ -88,7 +95,7 @@ let dispatch_tool ~tools (tc : Llm.tool_call) : Llm.tool_result =
             is_error = true;
             details = None;
           }
-      | Ok { Tool.content; details } ->
+      | Ok (Ok { Tool.content; details }) ->
           {
             Llm.id = tc.id;
             name = tc.name;
@@ -96,7 +103,7 @@ let dispatch_tool ~tools (tc : Llm.tool_call) : Llm.tool_result =
             is_error = false;
             details;
           }
-      | Error content ->
+      | Ok (Error content) ->
           {
             Llm.id = tc.id;
             name = tc.name;

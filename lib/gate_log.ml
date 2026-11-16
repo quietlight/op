@@ -79,9 +79,9 @@ let log_call t ~api ~provider ~model ~payload ~command ~reason ~turn ~verdict =
         Option.iter (Session.append_assistant s ~api ~provider ~model) turn;
         Session.append_custom s ~custom_type:"gate_verdict"
           ~data:(verdict_data ~command ~reason ~verdict)
-      with e ->
+      with Sys_error msg ->
         t.state <- Disabled;
-        t.warn ("gate log disabled: " ^ Printexc.to_string e))
+        t.warn ("gate log disabled: " ^ msg))
 
 let path t = match t.state with Open s -> Some (Session.path s) | _ -> None
 
