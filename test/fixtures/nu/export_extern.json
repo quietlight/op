@@ -1,0 +1,26 @@
+[
+    {
+        "content": "export extern",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 0,
+            "end": 13
+        }
+    },
+    {
+        "content": "id",
+        "shape": "shape_string",
+        "span": {
+            "start": 14,
+            "end": 16
+        }
+    },
+    {
+        "content": "[]",
+        "shape": "shape_signature",
+        "span": {
+            "start": 17,
+            "end": 19
+        }
+    }
+]

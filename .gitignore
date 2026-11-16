@@ -1,0 +1,20 @@
+# Build output
+_build/
+*.install
+
+# opam local switch
+_opam/
+
+# Editor / tooling
+.merlin
+*.swp
+.DS_Store
+
+# Agent-local state
+.claude/
+.op/
+
+# Other VCS
+.pijul/
+
+TODO.md

@@ -1,0 +1,18 @@
+[
+    {
+        "content": "overlay use",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 0,
+            "end": 11
+        }
+    },
+    {
+        "content": "foo.nu",
+        "shape": "shape_string",
+        "span": {
+            "start": 12,
+            "end": 18
+        }
+    }
+]

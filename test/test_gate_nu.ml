@@ -1,0 +1,515 @@
+(* Tests for Op.Gate_nu: the static AST walk (layer 1) against the committed
+   real-nu-0.114 fixtures under fixtures/nu, and the full [verdict] closure
+   (length cap, AST-failure Deny, and the layer-2 sensitive-path routing) driven
+   by canned [ast]/judge closures — no nu process is spawned here. *)
+
+let externals = [ "skraak"; "op" ]
+
+(* Load a committed AST fixture. Dune copies fixtures/ into the test sandbox, so
+   the path is relative to the test's run directory. *)
+let fixture name =
+  Fmt.kstr Test_support.read_file "fixtures/nu/%s.json" name
+  |> Yojson.Safe.from_string
+
+let analyze ?(modules = []) ?(plugins = []) name =
+  Op.Gate_nu.analyze_ast ~externals ~modules ~plugins (fixture name)
+
+let ok ?modules ?plugins name =
+  match analyze ?modules ?plugins name with
+  | Ok () -> ()
+  | Error e -> Alcotest.failf "%s: expected Ok, got Error %S" name e
+
+let denied ?modules ?plugins ~naming name =
+  match analyze ?modules ?plugins name with
+  | Ok () -> Alcotest.failf "%s: expected Error, got Ok" name
+  | Error e ->
+      Alcotest.(check bool)
+        (Fmt.str "%s denial names %S" name naming)
+        true
+        (Test_support.contains e naming)
+
+(* --- layer 1: AST walk against real fixtures --- *)
+
+let test_clean_pipeline_ok () =
+  (* skraak + op externals, from json / get builtins: all within the toolbox *)
+  ok "clean"
+
+let test_use_std_ok () = ok "use_std"
+let test_external_not_in_toolbox () = denied ~naming:"curl" "external_curl"
+
+(* The Unix text-tool reflex (grep above all) gets its nu translation in the
+   deny, not the network-delegation hint — the deny is where a model actually
+   reads what to do instead. *)
+let test_external_grep_hint () =
+  denied ~naming:"where item =~" "external_grep";
+  denied ~naming:"practical-nu.md" "external_grep"
+
+let test_path_dispatch_denied () =
+  denied ~naming:"/usr/bin/whoami" "path_dispatch"
+
+(* Path dispatch whose basename is an allowlisted external (the "run my
+   just-built binary" reflex): still denied, but the message must steer to the
+   bare toolbox name. *)
+let test_path_dispatch_toolbox_hint () =
+  denied ~naming:"call it bare (`^op`)" "path_dispatch_toolbox"
+
+let test_http_builtin_denied () = denied ~naming:"http" "http_get"
+let test_run_external_denied () = denied ~naming:"run-external" "run_external"
+let test_exec_denied () = denied ~naming:"exec" "exec_cmd"
+let test_source_denied () = denied ~naming:"source" "source_file"
+let test_overlay_use_denied () = denied ~naming:"overlay use" "overlay_use"
+let test_source_env_denied () = denied ~naming:"source-env" "source_env"
+
+(* [use std] is allowed but a std-prefixed *file* is not, and a std/ submodule
+   is fine — the boundary between the builtin stdlib and file imports. *)
+let test_use_file_denied () = denied ~naming:"use" "use_file"
+let test_use_std_submodule_ok () = ok "use_std_sub"
+
+(* Closure/block nesting: the load-bearing case flatten exists to catch. A
+   denied builtin or out-of-toolbox external hidden in [each { }], [do { }],
+   [if { }], [def f [] { }] or a [$"(...)"] interpolation must still be denied —
+   [get block] would have serialized these bodies as opaque block-ids and let
+   them through. *)
+let test_closure_http_denied () = denied ~naming:"http" "closure_http"
+
+(* `job` is allowed (spawn/recv give gated concurrency; jobs die at script
+   exit), but a denied builtin inside a job closure is still caught — flatten
+   emits the closure body as ordinary tokens. *)
+let test_job_spawn_ok () = ok "job_spawn"
+let test_job_http_denied () = denied ~naming:"http" "job_http"
+let test_closure_external_denied () = denied ~naming:"curl" "closure_curl"
+let test_do_http_denied () = denied ~naming:"http" "do_http"
+let test_if_http_denied () = denied ~naming:"http" "if_http"
+let test_def_http_denied () = denied ~naming:"http" "def_http"
+let test_interp_http_denied () = denied ~naming:"http" "interp_http"
+
+(* `extern` is the one construct that runs a program outside the toolbox with
+   nothing for the walk to catch: the declaration makes the call site flatten to
+   a bare shape_internalcall and no shape_external token is emitted anywhere, so
+   [check_external] never sees the name while nu still executes it
+   (`extern id []; id -u` really does run /usr/bin/id). The declaration itself
+   is therefore denied, in both its bare and `export` spellings — the latter
+   matters because [first_word "export extern"] is "export", not "extern". *)
+let test_extern_denied () = denied ~naming:"extern" "extern_call"
+let test_export_extern_denied () = denied ~naming:"extern" "export_extern"
+
+(* A computed external head (`^$cmd`) flattens to garbage and is denied. *)
+let test_computed_external_denied () =
+  denied ~naming:"computed" "computed_external"
+
+(* Setting op's cross-process handshake vars (OP_DEPTH / OP_HOST_PATH) in an env
+   record hands a nested op a forged value — resetting op's op->nu->op recursion
+   guard when `op` is a toolbox external. The write is denied in both the record
+   ({OP_DEPTH: "0"}) and list ([OP_DEPTH "0"]) forms; a *read*
+   ({PATH: $env.OP_HOST_PATH}, to pass PATH through) is legitimate and allowed —
+   the token before the name is a shape_variable there, not a record/list
+   delimiter. Fixtures are real nu-0.114 flattens of the with-env constructs. *)
+let test_handshake_write_record_denied () =
+  denied ~naming:"OP_DEPTH" "handshake_write_record"
+
+let test_handshake_write_list_denied () =
+  denied ~naming:"OP_DEPTH" "handshake_write_list"
+
+let test_handshake_read_ok () = ok "handshake_read"
+
+(* Guard against a false positive: an external with an interpolated argument
+   followed by a flag (`op $"(...)" --json`) is a legitimate toolbox call, not a
+   computed head — it must pass layer 1. *)
+let test_op_interp_ok () = ok "op_interp"
+
+(* open/save read/write files with no external call, so the AST walk passes them
+   — layer 2 (text check) is what routes them to the judge. *)
+let test_sensitive_open_passes_layer1 () = ok "sensitive_open"
+let test_save_dotfile_passes_layer1 () = ok "save_dotfile"
+
+(* --- profile modules and plugins in the walk --- *)
+
+let profile_modules = [ "gpx.nu"; "bad.nu" ]
+let test_use_module_ok () = ok ~modules:profile_modules "use_module"
+let test_use_module_unknown_denied () = denied ~naming:"use" "use_module"
+
+let test_use_module_pathform_denied () =
+  denied ~modules:profile_modules ~naming:"use" "use_module_pathform"
+
+let test_plugin_use_ok () = ok ~plugins:[ "polars" ] "plugin_use"
+let test_plugin_use_unknown_denied () = denied ~naming:"plugin use" "plugin_use"
+
+let test_plugin_add_denied () =
+  denied ~plugins:[ "polars" ] ~naming:"plugin" "plugin_add"
+
+let test_plugin_list_denied () =
+  denied ~plugins:[ "polars" ] ~naming:"plugin" "plugin_list"
+
+(* A *declared*-variable computed head (`let c = ...; ^$c`) flattens to inert
+   [shape_variable], so the walk passes it — the source-text check in [verdict]
+   is what denies it (below). The committed fixture documents the walk gap. *)
+let test_computed_declared_passes_layer1 () = ok "computed_declared"
+
+(* An empty toolbox denies even the otherwise-clean pipeline's externals. *)
+let test_empty_toolbox_denies_external () =
+  match
+    Op.Gate_nu.analyze_ast ~externals:[] ~modules:[] ~plugins:[]
+      (fixture "clean")
+  with
+  | Error e ->
+      Alcotest.(check bool)
+        "names skraak" true
+        (Test_support.contains e "skraak")
+  | Ok () -> Alcotest.fail "empty toolbox should deny the skraak external"
+
+(* --- layer 2 + verdict wiring, with canned ast/judge --- *)
+
+let tag = function
+  | Op.Gate.Allow -> "allow"
+  | Op.Gate.Warn _ -> "warn"
+  | Op.Gate.Deny _ -> "deny"
+  | Op.Gate.Fault _ -> "fault"
+  | Op.Gate.Code_red _ -> "code_red"
+
+let reason = function
+  | Op.Gate.Allow -> ""
+  | Op.Gate.Warn s | Op.Gate.Deny s | Op.Gate.Fault s | Op.Gate.Code_red s -> s
+
+(* An [ast] closure serving a fixture regardless of the script text, so the
+   verdict path can be exercised without nu. *)
+let ast_of name _script = Ok (fixture name)
+let ast_fails _script = Error "parse error at 1:5"
+
+let verdict ?judge ?(modules = []) ?(plugins = []) ~ast ~script () =
+  Op.Gate_nu.verdict ~ast ~externals
+    ~scan_modules:(fun () -> modules)
+    ~plugins ~judge ~window:[ "cwd: /x" ] ~script
+
+let test_verdict_clean_allows () =
+  let v = verdict ~ast:(ast_of "clean") ~script:"skraak sql ..." () in
+  Alcotest.(check string) "clean -> allow" "allow" (tag v)
+
+let test_verdict_external_denies () =
+  let v = verdict ~ast:(ast_of "external_curl") ~script:"curl x" () in
+  Alcotest.(check string) "curl -> deny" "deny" (tag v);
+  Alcotest.(check bool)
+    "names curl" true
+    (Test_support.contains (reason v) "curl")
+
+let test_verdict_ast_failure_denies () =
+  let v = verdict ~ast:ast_fails ~script:"bad (syntax" () in
+  Alcotest.(check string) "ast failure -> deny" "deny" (tag v);
+  Alcotest.(check bool)
+    "carries nu's error" true
+    (Test_support.contains (reason v) "parse error")
+
+let test_verdict_too_long_denies () =
+  let script = String.make 40_000 'x' in
+  let v = verdict ~ast:(ast_of "clean") ~script () in
+  Alcotest.(check string) "over cap -> deny" "deny" (tag v);
+  Alcotest.(check bool)
+    "explains the cap" true
+    (Test_support.contains (reason v) "too long")
+
+(* Layer 2: a clean AST but a script that names a secret path routes to the
+   judge (here a fake that warns), and fails closed with no judge. *)
+let test_verdict_sensitive_path_routes_to_judge () =
+  let judge ~window:_ ~command:_ ~reason:_ = Op.Gate.Warn "judged" in
+  let v =
+    verdict ~judge ~ast:(ast_of "sensitive_open")
+      ~script:"open ~/.ssh/id_ed25519" ()
+  in
+  Alcotest.(check string) "routes to judge" "warn" (tag v)
+
+let test_verdict_sensitive_path_no_judge_fails_closed () =
+  let v =
+    verdict ~ast:(ast_of "sensitive_open") ~script:"open ~/.ssh/id_ed25519" ()
+  in
+  Alcotest.(check string) "no judge -> deny" "deny" (tag v)
+
+let test_verdict_save_dotfile_routes_to_judge () =
+  let judge ~window:_ ~command:_ ~reason:_ = Op.Gate.Warn "judged" in
+  let v =
+    verdict ~judge ~ast:(ast_of "save_dotfile") ~script:"echo hi | save .env" ()
+  in
+  Alcotest.(check string) "save .env routes" "warn" (tag v)
+
+(* The declared-variable computed head passes the walk, so the deny must come
+   from the verdict's source-text check. *)
+let test_verdict_computed_head_denies () =
+  let v =
+    verdict ~ast:(ast_of "clean") ~script:"let c = \"curl\"\n^$c example.com" ()
+  in
+  Alcotest.(check string) "computed head -> deny" "deny" (tag v);
+  Alcotest.(check bool)
+    "names computed" true
+    (Test_support.contains (reason v) "computed")
+
+(* A regex anchor's `^(` sits after a quote, not at a command position — it
+   must not trip the computed-head check. *)
+let test_verdict_regex_anchor_allowed () =
+  let v =
+    verdict ~ast:(ast_of "clean") ~script:{|"x1" | parse --regex '^(\d)x'|} ()
+  in
+  Alcotest.(check string) "regex anchor -> allow" "allow" (tag v)
+
+(* --- module vetting: the verdict reads each used module's source through the
+   same ast closure and walks it with the same rules --- *)
+
+let module_sources = [ ("gpx.nu", "GPX_SRC"); ("bad.nu", "BAD_SRC") ]
+
+(* An [ast] closure routing module sources to canned fixtures and any other
+   script (the top-level one) to [top]. *)
+let ast_routing ~top ~gpx script =
+  if script = "GPX_SRC" then Ok (fixture gpx)
+  else if script = "BAD_SRC" then Ok (fixture "http_get")
+  else Ok (fixture top)
+
+let test_verdict_module_vet_pass () =
+  let ast = ast_routing ~top:"use_module" ~gpx:"clean" in
+  let v = verdict ~modules:module_sources ~ast ~script:"use gpx.nu" () in
+  Alcotest.(check string) "clean module -> allow" "allow" (tag v)
+
+let test_verdict_module_vet_fail () =
+  let ast = ast_routing ~top:"use_module_bad" ~gpx:"clean" in
+  let v = verdict ~modules:module_sources ~ast ~script:"use bad.nu" () in
+  Alcotest.(check string) "http in module -> deny" "deny" (tag v);
+  Alcotest.(check bool)
+    "names the module" true
+    (Test_support.contains (reason v) "bad.nu");
+  Alcotest.(check bool)
+    "names the offender" true
+    (Test_support.contains (reason v) "http")
+
+(* bad.nu imports gpx.nu whose body is denied: the recursion must surface the
+   inner module's failure. *)
+let test_verdict_module_vet_recursive () =
+  let ast script =
+    if script = "BAD_SRC" then Ok (fixture "use_module")
+    else if script = "GPX_SRC" then Ok (fixture "http_get")
+    else Ok (fixture "use_module_bad")
+  in
+  let v = verdict ~modules:module_sources ~ast ~script:"use bad.nu" () in
+  Alcotest.(check string) "recursive vet -> deny" "deny" (tag v);
+  Alcotest.(check bool)
+    "names the inner module" true
+    (Test_support.contains (reason v) "gpx.nu")
+
+(* Layer 2 over module sources. The module dirs are writable by the nu tool
+   itself ([save] to a non-dot path), so a sensitive read hidden in a module and
+   called from an innocuous top-level script must reach the judge exactly as the
+   same line written inline does — otherwise the verdict depends on where the
+   line was written rather than on what it does. *)
+let secret_module = [ ("gpx.nu", "export def peek [] { open ~/.ssh/id_rsa }") ]
+
+let ast_module_clean script =
+  if String.length script > 0 && script.[0] = 'e' then Ok (fixture "clean")
+  else Ok (fixture "use_module")
+
+let test_verdict_sensitive_in_module_routes_to_judge () =
+  let judge ~window:_ ~command:_ ~reason:_ = Op.Gate.Warn "judged" in
+  let v =
+    verdict ~judge ~modules:secret_module ~ast:ast_module_clean
+      ~script:"use gpx.nu *; peek" ()
+  in
+  Alcotest.(check string) "module secret routes to judge" "warn" (tag v)
+
+let test_verdict_sensitive_in_module_no_judge_fails_closed () =
+  let v =
+    verdict ~modules:secret_module ~ast:ast_module_clean
+      ~script:"use gpx.nu *; peek" ()
+  in
+  Alcotest.(check string) "no judge -> deny" "deny" (tag v);
+  Alcotest.(check bool)
+    "names the module" true
+    (Test_support.contains (reason v) "gpx.nu")
+
+(* The judge adjudicates source, so a top-level script that only says [use] has
+   to be accompanied by the module body or there is nothing to judge. *)
+let test_verdict_module_source_reaches_judge () =
+  let seen = ref "" in
+  let judge ~window:_ ~command ~reason:_ =
+    seen := command;
+    Op.Gate.Warn "judged"
+  in
+  let _ =
+    verdict ~judge ~modules:secret_module ~ast:ast_module_clean
+      ~script:"use gpx.nu *; peek" ()
+  in
+  Alcotest.(check bool)
+    "judge sees the top-level script" true
+    (Test_support.contains !seen "use gpx.nu");
+  Alcotest.(check bool)
+    "judge sees the module body" true
+    (Test_support.contains !seen "open ~/.ssh/id_rsa")
+
+(* The anti-runaway cap applies to module sources too: module dirs are
+   run-writable, so an oversized module would otherwise feed `nu ast` and the
+   judge payload past the bound the top-level script obeys. The module is
+   rejected on size before its own AST is needed. *)
+let test_verdict_module_too_long_denies () =
+  let big = String.make (Op.Gate_nu.max_script_chars + 1) 'x' in
+  let modules = [ ("gpx.nu", big) ] in
+  let v = verdict ~modules ~ast:(ast_of "use_module") ~script:"use gpx.nu" () in
+  Alcotest.(check string) "oversized module -> deny" "deny" (tag v);
+  Alcotest.(check bool)
+    "names the module" true
+    (Test_support.contains (reason v) "gpx.nu");
+  Alcotest.(check bool)
+    "explains the cap" true
+    (Test_support.contains (reason v) "too long")
+
+let test_verdict_module_appears_between_calls () =
+  let modules = ref [] in
+  let v =
+    Op.Gate_nu.verdict
+      ~ast:(ast_routing ~top:"use_module" ~gpx:"clean")
+      ~externals
+      ~scan_modules:(fun () -> !modules)
+      ~plugins:[] ~judge:None
+  in
+  let first = v ~window:[] ~script:"use gpx.nu" in
+  modules := module_sources;
+  let second = v ~window:[] ~script:"use gpx.nu" in
+  Alcotest.(check string) "missing module denied" "deny" (tag first);
+  Alcotest.(check string) "new module allowed" "allow" (tag second)
+
+let test_verdict_module_mutates_between_calls () =
+  let source = ref "GPX_SRC" in
+  let ast script =
+    if script = "GPX_SRC" then Ok (fixture "clean")
+    else if script = "BAD_SRC" then Ok (fixture "http_get")
+    else Ok (fixture "use_module")
+  in
+  let v =
+    Op.Gate_nu.verdict ~ast ~externals
+      ~scan_modules:(fun () -> [ ("gpx.nu", !source) ])
+      ~plugins:[] ~judge:None
+  in
+  let first = v ~window:[] ~script:"use gpx.nu" in
+  source := "BAD_SRC";
+  let second = v ~window:[] ~script:"use gpx.nu" in
+  Alcotest.(check string) "clean module allowed" "allow" (tag first);
+  Alcotest.(check string) "mutated module denied" "deny" (tag second);
+  Alcotest.(check bool)
+    "mutation names http" true
+    (Test_support.contains (reason second) "http")
+
+(* Within one call the cache remains the recursion guard. A imports B and B
+   imports A; each source is analyzed once and the call terminates. *)
+let test_verdict_module_cycle_guard () =
+  let a_calls = ref 0 and b_calls = ref 0 in
+  let ast script =
+    if script = "A_SRC" then (
+      incr a_calls;
+      Ok (fixture "use_module_bad"))
+    else if script = "B_SRC" then (
+      incr b_calls;
+      Ok (fixture "use_module"))
+    else Ok (fixture "use_module")
+  in
+  let modules = [ ("gpx.nu", "A_SRC"); ("bad.nu", "B_SRC") ] in
+  let v = verdict ~modules ~ast ~script:"use gpx.nu" () in
+  Alcotest.(check string) "cycle allows" "allow" (tag v);
+  Alcotest.(check int) "A analyzed once" 1 !a_calls;
+  Alcotest.(check int) "B analyzed once" 1 !b_calls
+
+(* A clean script with no sensitive path is allowed outright — the judge is
+   never consulted (layer 2 is the only path to it). *)
+let test_verdict_clean_skips_judge () =
+  let called = ref false in
+  let judge ~window:_ ~command:_ ~reason:_ =
+    called := true;
+    Op.Gate.Deny "should not run"
+  in
+  let v = verdict ~judge ~ast:(ast_of "clean") ~script:"skraak sql ..." () in
+  Alcotest.(check string) "allow" "allow" (tag v);
+  Alcotest.(check bool) "judge not consulted" false !called
+
+let suite =
+  ( "gate_nu",
+    [
+      ("clean pipeline ok", `Quick, test_clean_pipeline_ok);
+      ("use std ok", `Quick, test_use_std_ok);
+      ("external not in toolbox", `Quick, test_external_not_in_toolbox);
+      ("external grep gets nu hint", `Quick, test_external_grep_hint);
+      ("path dispatch denied", `Quick, test_path_dispatch_denied);
+      ( "path dispatch to toolbox basename hints bare name",
+        `Quick,
+        test_path_dispatch_toolbox_hint );
+      ("http builtin denied", `Quick, test_http_builtin_denied);
+      ("run-external denied", `Quick, test_run_external_denied);
+      ("exec denied", `Quick, test_exec_denied);
+      ("source denied", `Quick, test_source_denied);
+      ("overlay use denied", `Quick, test_overlay_use_denied);
+      ("source-env denied", `Quick, test_source_env_denied);
+      ("use of a file denied", `Quick, test_use_file_denied);
+      ("use std submodule ok", `Quick, test_use_std_submodule_ok);
+      ("closure http denied", `Quick, test_closure_http_denied);
+      ("job spawn ok", `Quick, test_job_spawn_ok);
+      ("job closure http denied", `Quick, test_job_http_denied);
+      ("closure external denied", `Quick, test_closure_external_denied);
+      ("do http denied", `Quick, test_do_http_denied);
+      ("if http denied", `Quick, test_if_http_denied);
+      ("def http denied", `Quick, test_def_http_denied);
+      ("interp http denied", `Quick, test_interp_http_denied);
+      ("extern denied", `Quick, test_extern_denied);
+      ("export extern denied", `Quick, test_export_extern_denied);
+      ("computed external denied", `Quick, test_computed_external_denied);
+      ( "handshake write record denied",
+        `Quick,
+        test_handshake_write_record_denied );
+      ("handshake write list denied", `Quick, test_handshake_write_list_denied);
+      ("handshake read ok", `Quick, test_handshake_read_ok);
+      ("op interp arg ok", `Quick, test_op_interp_ok);
+      ( "sensitive open passes layer 1",
+        `Quick,
+        test_sensitive_open_passes_layer1 );
+      ("save dotfile passes layer 1", `Quick, test_save_dotfile_passes_layer1);
+      ("use module ok", `Quick, test_use_module_ok);
+      ("use module unknown denied", `Quick, test_use_module_unknown_denied);
+      ("use module pathform denied", `Quick, test_use_module_pathform_denied);
+      ("plugin use ok", `Quick, test_plugin_use_ok);
+      ("plugin use unknown denied", `Quick, test_plugin_use_unknown_denied);
+      ("plugin add denied", `Quick, test_plugin_add_denied);
+      ("plugin list denied", `Quick, test_plugin_list_denied);
+      ( "computed declared passes layer 1",
+        `Quick,
+        test_computed_declared_passes_layer1 );
+      ( "empty toolbox denies external",
+        `Quick,
+        test_empty_toolbox_denies_external );
+      ("verdict clean allows", `Quick, test_verdict_clean_allows);
+      ("verdict external denies", `Quick, test_verdict_external_denies);
+      ("verdict ast failure denies", `Quick, test_verdict_ast_failure_denies);
+      ("verdict too long denies", `Quick, test_verdict_too_long_denies);
+      ( "verdict sensitive path routes to judge",
+        `Quick,
+        test_verdict_sensitive_path_routes_to_judge );
+      ( "verdict sensitive path no judge fails closed",
+        `Quick,
+        test_verdict_sensitive_path_no_judge_fails_closed );
+      ( "verdict save dotfile routes to judge",
+        `Quick,
+        test_verdict_save_dotfile_routes_to_judge );
+      ("verdict computed head denies", `Quick, test_verdict_computed_head_denies);
+      ("verdict regex anchor allowed", `Quick, test_verdict_regex_anchor_allowed);
+      ("verdict module vet pass", `Quick, test_verdict_module_vet_pass);
+      ("verdict module vet fail", `Quick, test_verdict_module_vet_fail);
+      ("verdict module vet recursive", `Quick, test_verdict_module_vet_recursive);
+      ( "verdict module too long denies",
+        `Quick,
+        test_verdict_module_too_long_denies );
+      ( "verdict sensitive in module routes to judge",
+        `Quick,
+        test_verdict_sensitive_in_module_routes_to_judge );
+      ( "verdict sensitive in module fails closed",
+        `Quick,
+        test_verdict_sensitive_in_module_no_judge_fails_closed );
+      ( "verdict module source reaches judge",
+        `Quick,
+        test_verdict_module_source_reaches_judge );
+      ( "verdict module appears between calls",
+        `Quick,
+        test_verdict_module_appears_between_calls );
+      ( "verdict module mutates between calls",
+        `Quick,
+        test_verdict_module_mutates_between_calls );
+      ("verdict module cycle guard", `Quick, test_verdict_module_cycle_guard);
+      ("verdict clean skips judge", `Quick, test_verdict_clean_skips_judge);
+    ] )

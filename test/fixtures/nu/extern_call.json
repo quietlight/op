@@ -1,0 +1,42 @@
+[
+    {
+        "content": "extern",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 0,
+            "end": 6
+        }
+    },
+    {
+        "content": "id",
+        "shape": "shape_string",
+        "span": {
+            "start": 7,
+            "end": 9
+        }
+    },
+    {
+        "content": "[]",
+        "shape": "shape_signature",
+        "span": {
+            "start": 10,
+            "end": 12
+        }
+    },
+    {
+        "content": "id",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 14,
+            "end": 16
+        }
+    },
+    {
+        "content": "-u",
+        "shape": "shape_externalarg",
+        "span": {
+            "start": 17,
+            "end": 19
+        }
+    }
+]

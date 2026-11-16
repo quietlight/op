@@ -1,0 +1,82 @@
+[
+    {
+        "content": "op",
+        "shape": "shape_external",
+        "span": {
+            "start": 0,
+            "end": 2
+        }
+    },
+    {
+        "content": "$\"",
+        "shape": "shape_string_interpolation",
+        "span": {
+            "start": 3,
+            "end": 5
+        }
+    },
+    {
+        "content": "(",
+        "shape": "shape_block",
+        "span": {
+            "start": 5,
+            "end": 6
+        }
+    },
+    {
+        "content": "open",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 6,
+            "end": 10
+        }
+    },
+    {
+        "content": "a.txt",
+        "shape": "shape_globpattern",
+        "span": {
+            "start": 11,
+            "end": 16
+        }
+    },
+    {
+        "content": ")",
+        "shape": "shape_block",
+        "span": {
+            "start": 16,
+            "end": 17
+        }
+    },
+    {
+        "content": "\"",
+        "shape": "shape_string_interpolation",
+        "span": {
+            "start": 17,
+            "end": 18
+        }
+    },
+    {
+        "content": "--json",
+        "shape": "shape_externalarg",
+        "span": {
+            "start": 19,
+            "end": 25
+        }
+    },
+    {
+        "content": "|",
+        "shape": "shape_pipe",
+        "span": {
+            "start": 26,
+            "end": 27
+        }
+    },
+    {
+        "content": "from json",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 28,
+            "end": 37
+        }
+    }
+]

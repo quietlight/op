@@ -1,0 +1,4 @@
+(executable
+ (public_name op)
+ (name main)
+ (libraries op cmdliner yojson eio eio_main mirage-crypto-rng.unix unix fmt))

@@ -1,0 +1,18 @@
+[
+    {
+        "content": "curl",
+        "shape": "shape_external",
+        "span": {
+            "start": 0,
+            "end": 4
+        }
+    },
+    {
+        "content": "https://example.com",
+        "shape": "shape_externalarg",
+        "span": {
+            "start": 5,
+            "end": 24
+        }
+    }
+]

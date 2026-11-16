@@ -1,0 +1,18 @@
+[
+    {
+        "content": "open",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 0,
+            "end": 4
+        }
+    },
+    {
+        "content": "~/.ssh/id_ed25519",
+        "shape": "shape_globpattern",
+        "span": {
+            "start": 5,
+            "end": 22
+        }
+    }
+]

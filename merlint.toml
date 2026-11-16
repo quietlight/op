@@ -1,0 +1,21 @@
+# merlint configuration. Searched upward from the analyzed path to the
+# workspace root; rule exclusions accumulate. See `merlint help config`.
+
+# ppx_expect inline-test modules live in a (library) stanza, so merlint treats
+# them as library modules and demands a companion test file (E605) and an .mli
+# (E505). They are already tests, so exclude them from both.
+[[rules]]
+files = "test/expect/*.ml"
+exclude = ["E605", "E505"]
+
+# test_support is a shared-helpers library, not an Alcotest test module, but its
+# name matches test_*.mli so E600 would demand it export only 'suite'.
+[[rules]]
+files = "test/support/*.mli"
+exclude = ["E600"]
+
+# Test interfaces exist only to satisfy require-mli; their single 'val suite' is
+# already documented. A module-level doc comment would be boilerplate noise.
+[[rules]]
+files = "test/*.mli"
+exclude = ["E400"]

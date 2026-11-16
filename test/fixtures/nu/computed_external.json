@@ -1,0 +1,18 @@
+[
+    {
+        "content": "$mycmd",
+        "shape": "shape_garbage",
+        "span": {
+            "start": 1,
+            "end": 7
+        }
+    },
+    {
+        "content": "arg",
+        "shape": "shape_externalarg",
+        "span": {
+            "start": 8,
+            "end": 11
+        }
+    }
+]

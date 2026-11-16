@@ -1,0 +1,6 @@
+(library
+ (name op_expect_tests)
+ (libraries op fmt yojson)
+ (inline_tests)
+ (preprocess
+  (pps ppx_expect)))

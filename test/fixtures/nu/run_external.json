@@ -1,0 +1,26 @@
+[
+    {
+        "content": "run-external",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 0,
+            "end": 12
+        }
+    },
+    {
+        "content": "curl",
+        "shape": "shape_globpattern",
+        "span": {
+            "start": 13,
+            "end": 17
+        }
+    },
+    {
+        "content": "https://example.com",
+        "shape": "shape_globpattern",
+        "span": {
+            "start": 18,
+            "end": 37
+        }
+    }
+]

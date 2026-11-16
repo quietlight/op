@@ -1,0 +1,5 @@
+; CLI-surface (cram) tests. They drive the real `op` executable, so they
+; cover the bin/main.ml wiring that the in-process tests cannot reach.
+
+(cram
+ (deps %{bin:op}))

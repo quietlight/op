@@ -1,0 +1,10 @@
+[
+    {
+        "content": "/usr/bin/whoami",
+        "shape": "shape_external",
+        "span": {
+            "start": 1,
+            "end": 16
+        }
+    }
+]

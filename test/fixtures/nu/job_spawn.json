@@ -1,0 +1,138 @@
+[
+  {
+    "content": "let",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 0,
+      "end": 3
+    }
+  },
+  {
+    "content": "id",
+    "shape": "shape_vardecl",
+    "span": {
+      "start": 4,
+      "end": 6
+    }
+  },
+  {
+    "content": "(",
+    "shape": "shape_block",
+    "span": {
+      "start": 9,
+      "end": 10
+    }
+  },
+  {
+    "content": "job spawn",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 10,
+      "end": 19
+    }
+  },
+  {
+    "content": "{ ",
+    "shape": "shape_closure",
+    "span": {
+      "start": 20,
+      "end": 22
+    }
+  },
+  {
+    "content": "\"x\"",
+    "shape": "shape_string",
+    "span": {
+      "start": 22,
+      "end": 25
+    }
+  },
+  {
+    "content": "|",
+    "shape": "shape_pipe",
+    "span": {
+      "start": 26,
+      "end": 27
+    }
+  },
+  {
+    "content": "op",
+    "shape": "shape_external",
+    "span": {
+      "start": 29,
+      "end": 31
+    }
+  },
+  {
+    "content": "--json",
+    "shape": "shape_externalarg",
+    "span": {
+      "start": 32,
+      "end": 38
+    }
+  },
+  {
+    "content": "|",
+    "shape": "shape_pipe",
+    "span": {
+      "start": 39,
+      "end": 40
+    }
+  },
+  {
+    "content": "from json",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 41,
+      "end": 50
+    }
+  },
+  {
+    "content": " }",
+    "shape": "shape_closure",
+    "span": {
+      "start": 50,
+      "end": 52
+    }
+  },
+  {
+    "content": ")",
+    "shape": "shape_block",
+    "span": {
+      "start": 52,
+      "end": 53
+    }
+  },
+  {
+    "content": "job recv",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 55,
+      "end": 63
+    }
+  },
+  {
+    "content": "--timeout",
+    "shape": "shape_flag",
+    "span": {
+      "start": 64,
+      "end": 73
+    }
+  },
+  {
+    "content": "30",
+    "shape": "shape_int",
+    "span": {
+      "start": 74,
+      "end": 76
+    }
+  },
+  {
+    "content": "sec",
+    "shape": "shape_string",
+    "span": {
+      "start": 76,
+      "end": 79
+    }
+  }
+]

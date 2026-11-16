@@ -1,0 +1,82 @@
+[
+  {
+    "content": "with-env",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 0,
+      "end": 8
+    }
+  },
+  {
+    "content": "{",
+    "shape": "shape_record",
+    "span": {
+      "start": 9,
+      "end": 10
+    }
+  },
+  {
+    "content": "OP_DEPTH",
+    "shape": "shape_string",
+    "span": {
+      "start": 10,
+      "end": 18
+    }
+  },
+  {
+    "content": ": ",
+    "shape": "shape_record",
+    "span": {
+      "start": 18,
+      "end": 20
+    }
+  },
+  {
+    "content": "\"0\"",
+    "shape": "shape_string",
+    "span": {
+      "start": 20,
+      "end": 23
+    }
+  },
+  {
+    "content": "}",
+    "shape": "shape_record",
+    "span": {
+      "start": 23,
+      "end": 24
+    }
+  },
+  {
+    "content": "{ ^",
+    "shape": "shape_closure",
+    "span": {
+      "start": 25,
+      "end": 28
+    }
+  },
+  {
+    "content": "op",
+    "shape": "shape_external",
+    "span": {
+      "start": 28,
+      "end": 30
+    }
+  },
+  {
+    "content": "x",
+    "shape": "shape_externalarg",
+    "span": {
+      "start": 31,
+      "end": 32
+    }
+  },
+  {
+    "content": " }",
+    "shape": "shape_closure",
+    "span": {
+      "start": 32,
+      "end": 34
+    }
+  }
+]

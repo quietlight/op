@@ -1,0 +1,15 @@
+(library
+ (name op)
+ (libraries
+  yojson
+  cohttp
+  cohttp-eio
+  eio
+  tls
+  tls-eio
+  ca-certs
+  uri
+  domain-name
+  unix
+  re
+  fmt))

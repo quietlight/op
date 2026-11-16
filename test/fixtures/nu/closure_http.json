@@ -1,0 +1,90 @@
+[
+    {
+        "content": "[",
+        "shape": "shape_list",
+        "span": {
+            "start": 0,
+            "end": 1
+        }
+    },
+    {
+        "content": "1",
+        "shape": "shape_int",
+        "span": {
+            "start": 1,
+            "end": 2
+        }
+    },
+    {
+        "content": " ",
+        "shape": "shape_list",
+        "span": {
+            "start": 2,
+            "end": 3
+        }
+    },
+    {
+        "content": "2",
+        "shape": "shape_int",
+        "span": {
+            "start": 3,
+            "end": 4
+        }
+    },
+    {
+        "content": "]",
+        "shape": "shape_list",
+        "span": {
+            "start": 4,
+            "end": 5
+        }
+    },
+    {
+        "content": "|",
+        "shape": "shape_pipe",
+        "span": {
+            "start": 6,
+            "end": 7
+        }
+    },
+    {
+        "content": "each",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 8,
+            "end": 12
+        }
+    },
+    {
+        "content": "{ ",
+        "shape": "shape_closure",
+        "span": {
+            "start": 13,
+            "end": 15
+        }
+    },
+    {
+        "content": "http get",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 15,
+            "end": 23
+        }
+    },
+    {
+        "content": "https://example.com",
+        "shape": "shape_string",
+        "span": {
+            "start": 24,
+            "end": 43
+        }
+    },
+    {
+        "content": " }",
+        "shape": "shape_closure",
+        "span": {
+            "start": 43,
+            "end": 45
+        }
+    }
+]

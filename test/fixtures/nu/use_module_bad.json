@@ -1,0 +1,26 @@
+[
+    {
+        "content": "use",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 0,
+            "end": 3
+        }
+    },
+    {
+        "content": "bad.nu",
+        "shape": "shape_string",
+        "span": {
+            "start": 4,
+            "end": 10
+        }
+    },
+    {
+        "content": "bad hello",
+        "shape": "shape_internalcall",
+        "span": {
+            "start": 11,
+            "end": 20
+        }
+    }
+]
