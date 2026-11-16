@@ -37,7 +37,7 @@ same session format, so the two can read each other's history.
 ## Requirements
 
 - Linux or another POSIX host. Windows is not supported; use WSL.
-- [Nushell](https://www.nushell.sh/) 0.115 on your PATH, if you want the
+- [Nushell](https://www.nushell.sh/) 0.117 on your PATH, if you want the
   `nu` tool. Without it op still runs with the file tools only.
 - OCaml 5.x with opam and dune 3.23+, to build from source.
 - An API key for at least one provider.
@@ -179,8 +179,9 @@ The file format is documented in
 
 op does not compact. When a model has a `contextWindow`, every result carries
 a `context` object (tokens, window, percent), and the run stops between turns
-once it passes `contextLimit`. The history is complete at that point, so
-nothing is lost.
+once it passes `contextLimit`. The check uses the usage the provider last
+reported, so it is a stopping threshold rather than a cap on the next request.
+The history is complete at that point, so nothing is lost.
 
 To carry on, generate a handoff brief and feed it to a fresh session:
 

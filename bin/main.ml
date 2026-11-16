@@ -6,13 +6,9 @@
 
 let ( let* ) = Result.bind
 
-type app_error = { msg : string; hint : string option }
+type app_error = List_cmd.app_error = { msg : string; hint : string option }
 
 let app_error ?hint msg = Error { msg; hint }
-
-let app_error_of_config e =
-  let msg, hint = Op.Config.json_error e in
-  { msg; hint }
 
 let err_unknown_provider name =
   Fmt.kstr (fun s -> app_error s) "unknown provider '%s'" name
@@ -43,7 +39,7 @@ let parse_override = function
 
 let load_context model_spec =
   let* config =
-    Op.Config.load_config () |> Result.map_error app_error_of_config
+    Op.Config.load_config () |> Result.map_error List_cmd.app_error_of_config
   in
   let override_provider, override_model = parse_override model_spec in
   let* provider_name =
@@ -437,8 +433,9 @@ let setup_nu ~env ~profile ~depth =
           ~env_allow:profile.Op.Config.env_allow
       in
       let tool =
-        Op.Nu.tool ~proc_mgr ~clock ?modules ?plugins ~env:nu_env ~executable
-          ~externals ()
+        Op.Nu.tool ~proc_mgr ~clock
+          ?version:(Op.Nu.version ~proc_mgr ~clock ~executable)
+          ?modules ?plugins ~env:nu_env ~executable ~externals ()
       in
       let ast = Op.Nu.ast ~proc_mgr ~clock ?modules ?plugins ~executable in
       Some (tool, { ast; externals; scan_modules; plugins = plugin_names })

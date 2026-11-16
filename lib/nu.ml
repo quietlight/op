@@ -219,6 +219,21 @@ let register_plugin ~proc_mgr ~clock ~executable ~registry ~binary =
   | Error `Timeout -> err "plugin add %s timed out" binary
   | Error (`Spawn msg) -> err "plugin add %s: %s" binary msg
 
+(* nu's own version ("0.117.1"), for the tool description: the model writes
+   better nu when it knows which nu. [None] when the probe fails; the
+   description then simply omits it. *)
+let version ~proc_mgr ~clock ~executable =
+  let out = Buffer.create 32 in
+  match
+    spawn_capture ~proc_mgr ~clock ~timeout:ast_timeout ~env:(env_with [])
+      ~executable ~stdout:(Eio.Flow.buffer_sink out)
+      ~stderr:(Eio.Flow.buffer_sink (Buffer.create 64))
+      [ "nu"; "--version" ]
+  with
+  | Ok (`Exited 0) -> (
+      match String.trim (Buffer.contents out) with "" -> None | v -> Some v)
+  | Ok _ | Error _ -> None
+
 (* [plugin list] output: [{name, commands: [{name, description}]}]. Entries
    that do not have that shape are skipped rather than failing the run: the
    catalog only feeds the tool description. *)
@@ -309,7 +324,7 @@ let plugin_note = function
          and examples):%s"
         (String.concat "" (List.map (plugin_line ~commands:p.commands) p.names))
 
-let description ~externals ~(modules : modules option)
+let description ~version ~externals ~(modules : modules option)
     ~(plugins : plugins option) =
   let allowed =
     match externals with [] -> "none" | l -> String.concat ", " l
@@ -330,10 +345,10 @@ let description ~externals ~(modules : modules option)
           m.include_path current
   in
   Fmt.str
-    "Run a Nushell (v0.114) script; returns combined stdout+stderr and the \
-     exit code. Raw Nushell source, not bash -- write real pipelines. #1 \
-     reflex to unlearn: don't reach for Unix tools or `^cmd`; only %s run as \
-     externals, everything else needs a builtin (echo->print, cat->open --raw, \
+    "Run a Nushell%s script; returns combined stdout+stderr and the exit code. \
+     Raw Nushell source, not bash -- write real pipelines. #1 reflex to \
+     unlearn: don't reach for Unix tools or `^cmd`; only %s run as externals, \
+     everything else needs a builtin (echo->print, cat->open --raw, \
      grep->where, 2>&1->| complete). Other externals and the network/exec \
      builtins (http, run-external, exec, start, source, overlay use) are \
      gate-denied. Concurrency: `par-each` and `job spawn`/`job recv` work; \
@@ -344,13 +359,14 @@ let description ~externals ~(modules : modules option)
      active profile is introspectable via $env.OP_NU_PROFILE, \
      $env.OP_NU_EXTERNALS, and $env.OP_NU_MODULES (comma-separated).%s Full \
      playbook: read ./skills/practical-nu.md at the project root.%s"
+    (match version with Some v -> Fmt.str " (v%s)" v | None -> "")
     allowed module_note (plugin_note plugins)
 
-let tool ~proc_mgr ~clock ?modules ?plugins ~env ~executable ~externals () :
-    Tool.t =
+let tool ~proc_mgr ~clock ?version ?modules ?plugins ~env ~executable ~externals
+    () : Tool.t =
   {
     name = "nu";
-    description = description ~externals ~modules ~plugins;
+    description = description ~version ~externals ~modules ~plugins;
     parameters =
       `Assoc
         [

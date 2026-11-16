@@ -91,7 +91,8 @@ type settings = {
       (** [contextLimit]: the fraction of the model's [contextWindow] at which a
           run stops with {!Agent.constructor-Context_limit_reached}. [None] uses
           {!default_context_limit}. Parsing rejects anything outside [(0, 1]].
-      *)
+          Checked between turns against the usage the provider last reported: a
+          stopping threshold, not a cap on the size of the next request. *)
   nu_profiles : (string * nu_profile) list;
       (** [nuProfiles]: named toolbox profiles, in file order — the sole source
           of the nu toolbox allowlist. *)

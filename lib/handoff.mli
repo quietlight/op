@@ -26,7 +26,9 @@
     [bin/main.ml], so the document's shape stays unit-testable. *)
 
 type files = { read : string list; modified : string list }
-(** The paths a session touched, deduplicated, in first-seen order. *)
+(** The paths a session touched {e through the native file tools}, deduplicated,
+    in first-seen order. Files a [nu] script, a build tool or a sub-agent read
+    or wrote are not seen and so are not listed. *)
 
 val files_of_history : Llm.message list -> files
 (** [files_of_history history] extracts the [path] argument of every read tool

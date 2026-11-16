@@ -360,7 +360,9 @@ let man =
        result envelope carries a $(b,context) object — $(b,{tokens, window, \
        pct}) — and the run stops once $(b,pct) reaches $(b,contextLimit) \
        (settings.json, default 0.85), with $(b,stopReason) $(i,context_limit) \
-       and exit 1. The history is complete at that point, so nothing is lost.";
+       and exit 1. The check runs between turns on the usage the provider last \
+       reported, so it is a stopping threshold, not a cap on the next request. \
+       The history is complete at that point, so nothing is lost.";
     `P
       "$(b,--handoff) is the way forward from there: instead of compacting the \
        thread in place, it writes a prompt that starts a $(i,fresh) one. Give \
@@ -414,6 +416,6 @@ let exits =
   ]
 
 let cmd run =
-  let doc = "Opininated one-shot agentic loop" in
+  let doc = "Opinionated one-shot agentic loop" in
   let info = Cmd.info "op" ~version:"0.2.0" ~doc ~man ~exits in
   Cmd.v info Term.(const run $ opts)

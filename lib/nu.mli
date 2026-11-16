@@ -12,9 +12,9 @@
     inspects matches the one the script executes under:
     - [modules]: [--include-path] makes [use <name>] resolve module files at
       parse time (colon-separated dirs).
-    - [plugins]: nu 0.114's [--no-config-file] hard-disables the plugin
-      registry, so a plugin-bearing run swaps it for empty op-managed config
-      stubs ([<stub_dir>/env.nu], [<stub_dir>/config.nu]) plus
+    - [plugins]: nu's [--no-config-file] hard-disables the plugin registry, so a
+      plugin-bearing run swaps it for empty op-managed config stubs
+      ([<stub_dir>/env.nu], [<stub_dir>/config.nu]) plus
       [--plugin-config <registry>]; a bare [plugin use <name>] then loads the
       plugin at parse time. *)
 
@@ -99,9 +99,18 @@ val plugin_commands :
     registered plugin's commands and descriptions from [registry] via nu's
     [plugin list]. It reads the registry file only; no plugin binary runs. *)
 
+val version :
+  proc_mgr:_ Eio.Process.mgr ->
+  clock:_ Eio.Time.clock ->
+  executable:string ->
+  string option
+(** [version ~proc_mgr ~clock ~executable] is what [nu --version] prints
+    (["0.117.1"]), or [None] when the probe fails. *)
+
 val tool :
   proc_mgr:_ Eio.Process.mgr ->
   clock:_ Eio.Time.clock ->
+  ?version:string ->
   ?modules:modules ->
   ?plugins:plugins ->
   env:(unit -> string array) ->
@@ -109,11 +118,11 @@ val tool :
   externals:string list ->
   unit ->
   Tool.t
-(** [tool ~proc_mgr ~clock ?modules ?plugins ~env ~executable ~externals ()] is
-    the nu tool with its Eio capabilities, per-call child [env] closure, nu
-    [executable], and toolbox [externals] captured. [externals], module names,
-    and plugin names are interpolated into the tool description so the model
-    knows what is available. *)
+(** [tool ~proc_mgr ~clock ?version ?modules ?plugins ~env ~executable
+     ~externals ()] is the nu tool with its Eio capabilities, per-call child
+    [env] closure, nu [executable], and toolbox [externals] captured. [version],
+    [externals], module names, and plugin names are interpolated into the tool
+    description so the model knows what is available. *)
 
 (** Internal helpers exposed for testing. *)
 module For_testing : sig
