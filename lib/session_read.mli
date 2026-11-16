@@ -6,9 +6,10 @@
 
 type tree
 (** A session file parsed once: its header and its tree entries, indexed by id.
-    Every reader below works on a [tree], so one operation — resolving a resume,
-    say — reads and parses the file a single time and reports a malformed file
-    from one place. *)
+    Every reader below works on a [tree], so choosing a leaf, correcting it and
+    rebuilding the history share one parse and report a malformed file from one
+    place. (A resume still reads the file once more: {!Session.resume} checks
+    the leaf itself before it appends.) *)
 
 val load : string -> (tree, string) result
 (** [load path] reads and parses the session file at [path]. Errors on an

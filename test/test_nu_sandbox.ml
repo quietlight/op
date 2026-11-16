@@ -141,9 +141,17 @@ let test_registry_path () =
   Alcotest.(check bool) "one per profile" true (p "data" <> p "dev");
   Alcotest.(check string)
     "named for it" "/agent/nu-plugin-data.msgpackz" (p "data");
+  (* A name that needs flattening stays inside the agent dir, and does not
+     collide with the profile whose name is the flattened form. *)
+  let hostile = p "../../etc/x" in
   Alcotest.(check string)
-    "a hostile name stays inside the agent dir"
-    "/agent/nu-plugin-______etc_x.msgpackz" (p "../../etc/x")
+    "stays in the agent dir" "/agent" (Filename.dirname hostile);
+  Alcotest.(check bool)
+    "no path separators survive" false
+    (String.contains (Filename.basename hostile) '/');
+  Alcotest.(check bool)
+    "data/dev is not data_dev" true
+    (p "data/dev" <> p "data_dev")
 
 let suite =
   ( "nu_sandbox",

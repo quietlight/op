@@ -192,7 +192,9 @@ let plugin_catalog ~warn ~proc_mgr ~clock ~executable ~registry =
 (* One registry per profile. A registry lists every plugin `plugin use` can
    load, so a shared file would let a profile load (and be told about) the
    plugins of whichever profile registered last. The profile name is a JSON
-   key, so anything outside a conservative set is flattened to '_'. *)
+   key, so anything outside a conservative set is flattened to '_' — and a
+   name that needed flattening also carries a digest of the original, so
+   [data/dev] and [data_dev] do not land on the same file. *)
 let registry_path ~agent_dir ~profile_name =
   let safe =
     String.map
@@ -201,7 +203,13 @@ let registry_path ~agent_dir ~profile_name =
         | _ -> '_')
       profile_name
   in
-  Filename.concat agent_dir (Fmt.str "nu-plugin-%s.msgpackz" safe)
+  let stem =
+    if safe = profile_name then safe
+    else
+      Fmt.str "%s-%s" safe
+        (String.sub (Digest.to_hex (Digest.string profile_name)) 0 8)
+  in
+  Filename.concat agent_dir (Fmt.str "nu-plugin-%s.msgpackz" stem)
 
 (* Resolve [nu_plugin_<name>] binaries and (re)build the profile's op-managed
    plugin registry when it is missing or older than a binary. [plugin add] executes

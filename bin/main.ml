@@ -398,9 +398,13 @@ let report_handoff ~json ~goal ~session_id ~model ~files document =
 (* --handoff: read a session and ask a model to write the opening prompt for a
    fresh one. Deliberately not the agent loop — no tools, no gate, one call —
    and the source session is only read, never appended to. *)
-let run_handoff ~env ~json ~cwd ~provider ~api_key ~model ~tls ~session_id
-    ~parent_id ~goal =
-  let fail msg = fail_with (if json then Cli.Json else Cli.Stream) msg in
+let run_handoff ~env ~(mode : Cli.output) ~cwd ~provider ~api_key ~model ~tls
+    ~session_id ~parent_id ~goal =
+  (* Fail in the run's own mode: a human-mode handoff is routinely piped into
+     the next op as its prompt, so an error must go to stderr as prose, never
+     to stdout as a JSON object that would be read as that prompt. *)
+  let fail msg = fail_with mode msg in
+  let json = mode = Cli.Json in
   let history =
     match Op.Session_resume.load ~cwd ~session_id ~parent_id () with
     | Ok (_, history) -> history
@@ -545,8 +549,8 @@ let handoff_cmd ~env ~(mode : Cli.output) ~session_id ~parent_id ~model_spec
   | Error e, _ -> fail_with mode ?hint:e.hint e.msg
   | _, Error e -> fail (Op.Transport.pp_error e)
   | Ok (_, provider, api_key, model), Ok tls ->
-      run_handoff ~env ~json:(mode = Cli.Json) ~cwd ~provider ~api_key ~model
-        ~tls ~session_id ~parent_id ~goal
+      run_handoff ~env ~mode ~cwd ~provider ~api_key ~model ~tls ~session_id
+        ~parent_id ~goal
 
 (* --render: replay a session through the transcript renderer. The source is a
    session of this directory, a file, or stdin (a file's lines, or a live
