@@ -68,6 +68,41 @@ run, so a spawned job's work is silently lost unless you `job recv` (or
 otherwise join) before the script ends. Job closures are gate-vetted like all
 other code: toolbox externals only, no `http`.
 
+## Waiting: timers, deadlines, polling
+
+No timer tool is needed; plain nu covers it, and you control the deadline
+yourself:
+
+- `sleep 30sec` blocks for a set time.
+- `job recv --timeout 5min` waits for a spawned job and **errors** on timeout
+  (*"No message was received in the requested time interval"*). Wrap it in
+  `try { ... } catch { ... }` if a timeout should not fail the script.
+- Polling (wait for a file or condition):
+  `loop { if ($p | path exists) { break }; sleep 5sec }`. Bound it with a
+  counter or a `(date now)` deadline.
+- **Raise the nu tool's `timeout` argument** (seconds, default 120) for any
+  wait longer than about 2 minutes, or the whole script is killed, and your
+  jobs die with it.
+
+The wait has to happen *inside one nu call*. Nothing (jobs, plugins, timers)
+outlives the script. If you need a subagent's result, join it before you end
+your turn. op has no "wake me later".
+
+## Web: `web search` / `web extract` (profile `web`)
+
+Where a profile lists the `web` plugin, start the script with `plugin use web`.
+
+    web search 'How is kauri dieback spread?' 'kauri dieback spread' 'kauri dieback hygiene' | to yaml
+    web search 'kauri hygiene rules' -n 2 | web extract --objective 'boot cleaning steps' | to yaml
+
+- **Always end with `| to yaml`.** nu's default table shows `excerpts` as
+  `[list 1 item]`, so you see no text at all.
+- The first argument is an objective (one sentence: what you want and why).
+  The rest are 1-3 short keyword queries. Don't repeat the objective as a
+  query.
+- The excerpts usually answer the question. Use `web extract` (with
+  `--objective`, or `--full` for whole pages) only when they don't.
+
 ## Capturing output and exit codes
 
 There is **no `2>&1`** — bash redirection doesn't parse and the gate blocks it.
