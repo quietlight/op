@@ -106,9 +106,9 @@ let block_text content =
 (* Paths are absolute in tool arguments; against a known cwd the run reads as
    the project it is in rather than as a column of $HOME.
 
-   The separator is a literal "/", not [Filename.dir_sep], matching how
-   [Glob.walk] builds its paths: session entries carry the paths the tools
-   saw, so this behaves the same whatever the host OS thinks a separator is. *)
+   The separator is a literal "/", not [Filename.dir_sep]: session entries
+   carry the paths the tools saw, so this behaves the same whatever the host OS
+   thinks a separator is. *)
 let rel t path =
   match t.cwd with
   | Some cwd when cwd <> "" && String.starts_with ~prefix:(cwd ^ "/") path ->
@@ -196,8 +196,9 @@ let call_lines t name args =
   match name with
   | "read" -> [ call_head t name (path () ^ read_range args) ]
   | "glob" ->
-      (* The search root is worth naming only when it is not the one glob would
-         have defaulted to — an "in <cwd>" on every call is a wide column of
+      (* The glob tool is gone (2026-11), but sessions recorded before then still
+         replay through here. The search root is worth naming only when it is not
+         the one glob would have defaulted to — an "in <cwd>" on every call is a wide column of
          nothing. *)
       let where =
         match str "path" args with

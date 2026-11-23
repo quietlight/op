@@ -32,7 +32,7 @@ let rec join_and = function
 let capabilities ~tools =
   let has t = List.mem t tools in
   let files =
-    [ ("read", "read"); ("write", "write"); ("edit", "edit"); ("glob", "glob") ]
+    [ ("read", "read"); ("write", "write"); ("edit", "edit") ]
     |> List.filter_map (fun (n, v) -> if has n then Some v else None)
   in
   let exec =

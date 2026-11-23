@@ -51,20 +51,6 @@ let test_paths () =
   deny "cwd/.op is no longer allowlisted"
     (path_tc "write" (cwd ^ "/.op/agent/skills/x.md"))
 
-(* --- glob root gating --- *)
-
-let test_glob_paths () =
-  let glob p =
-    tc ~args:(`Assoc [ ("pattern", `String "*"); ("path", `String p) ]) "glob"
-  in
-  check_tag "hidden root denied" "deny" (glob "/home/u/.ssh");
-  check_tag "cwd/.op root denied" "deny" (glob (cwd ^ "/.op/agent"));
-  check_tag "cwd/skills root allowed" "allow" (glob (cwd ^ "/skills"));
-  check_tag "ordinary root allowed" "allow" (glob (cwd ^ "/src"));
-  (* no path -> defaults to cwd, allowed *)
-  check_tag "no path allowed" "allow"
-    (tc ~args:(`Assoc [ ("pattern", `String "**/*.ml") ]) "glob")
-
 (* --- sensitive_path_re: the secret-path pattern shared with Gate_nu --- *)
 
 let test_sensitive_paths_match () =
@@ -218,7 +204,6 @@ let suite =
   ( "gate",
     [
       ("path rules", `Quick, test_paths);
-      ("glob root gating", `Quick, test_glob_paths);
       ("sensitive paths match", `Quick, test_sensitive_paths_match);
       ("sensitive path near misses", `Quick, test_sensitive_path_near_misses);
       ("warn fires once then rearms", `Quick, test_warn_fires_once_then_rearms);

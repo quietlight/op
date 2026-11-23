@@ -24,9 +24,9 @@
       a symlink under an allowed directory pointing at a protected one is not
       caught.
     - {b no working-directory containment}: the path rules only deny
-      dot-prefixed segments; [read]/[write]/[edit]/[glob] on any other path
-      outside [cwd] are allowed, so a confused or injected model can touch
-      non-dot files anywhere the process itself can reach.
+      dot-prefixed segments; [read]/[write]/[edit] on any other path outside
+      [cwd] are allowed, so a confused or injected model can touch non-dot files
+      anywhere the process itself can reach.
     - {b no per-tool scoping}: the gate is global, not per-agent-persona.
     - {b layer 2 is a substring match}: {!sensitive_path_re} is applied to
       script {e source text}, so it only sees paths written literally. A path

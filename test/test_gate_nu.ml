@@ -97,6 +97,17 @@ let test_export_extern_denied () = denied ~naming:"extern" "export_extern"
 let test_computed_external_denied () =
   denied ~naming:"computed" "computed_external"
 
+(* A made-up subcommand of a command group ([polars scan-parquet]) is still
+   blocked, but the reason names the group and how to list its real
+   subcommands instead of the generic syntax hint. Fixture from real nu 0.117
+   with the polars plugin loaded. *)
+let test_unknown_subcommand_hint () =
+  denied ~plugins:[ "polars" ] ~naming:"`polars scan-parquet` is not a command"
+    "unknown_subcommand";
+  denied ~plugins:[ "polars" ]
+    ~naming:"help commands | where name starts-with 'polars '"
+    "unknown_subcommand"
+
 (* Setting op's cross-process handshake vars (OP_DEPTH / OP_HOST_PATH) in an env
    record hands a nested op a forged value — resetting op's op->nu->op recursion
    guard when `op` is a toolbox external. The write is denied in both the record
@@ -412,6 +423,7 @@ let suite =
       ("extern denied", `Quick, test_extern_denied);
       ("export extern denied", `Quick, test_export_extern_denied);
       ("computed external denied", `Quick, test_computed_external_denied);
+      ("unknown subcommand hint", `Quick, test_unknown_subcommand_hint);
       ( "handshake write record denied",
         `Quick,
         test_handshake_write_record_denied );

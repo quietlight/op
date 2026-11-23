@@ -108,10 +108,7 @@ let str_arg args field =
    the tool's own validation will produce the real error. *)
 let base_verdict t (tc : Llm.tool_call) =
   match tc.name with
-  (* [glob] is included so its root [path] can't enumerate a hidden directory
-     (e.g. ~/.ssh); glob.ml already skips hidden dirs *during* traversal, but not
-     when one is chosen as the root. A missing path defaults to cwd -> Allow. *)
-  | "read" | "write" | "edit" | "glob" -> (
+  | "read" | "write" | "edit" -> (
       match str_arg tc.arguments "path" with
       | Some p -> path_verdict ~cwd:t.cwd p
       | None -> Allow)

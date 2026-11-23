@@ -209,6 +209,26 @@ First line: `plugin use polars` (bare — op supplies the registry; every other
 
 `polars into-nu` at the end returns plain nu data to keep piping.
 
+**Don't guess polars names from Python polars.** nu's plugin uses its own
+names, and a made-up one is a gate block. The right names for the usual
+guesses:
+
+| you might write                  | nu polars                                                       |
+|----------------------------------|-----------------------------------------------------------------|
+| `scan-parquet`, `read-parquet`   | `polars open f.parquet` (already lazy; `--eager` for eager)     |
+| `str-contains`, `str.contains`   | `polars contains <regex>` (on an expr: `polars col a \| polars contains x`) |
+| `str-extract`                    | none; `polars str-replace`/`str-slice`/`str-split`, or `polars into-nu` and nu `parse` |
+| `sqrt`, `abs`, `log`             | `polars math sqrt` / `polars math abs` / `polars math log`       |
+| `to-record`, `to-dicts`, `rows`  | `polars into-nu` (`-n N` for the first N rows)                  |
+| `rank`, `clip`                   | none; `polars arg-sort`, or compute in nu after `into-nu`        |
+| `when … then … otherwise`        | `polars when <cond> <value> \| polars otherwise <value>` (no `then`) |
+| `join … how=left`                | `polars join --left $other left_col right_col`                  |
+| `with-columns`                   | `polars with-column [ (… \| polars as name) ]`                  |
+
+To list the real names, run
+`help commands | where name starts-with 'polars ' | get name`.
+`help polars <sub>` only works for a subcommand that exists.
+
 ## Gate quick-reference (what gets denied)
 
 - Any external not in the toolbox; **path-form dispatch** (`^/usr/bin/x`, `./x`,

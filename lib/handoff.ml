@@ -2,7 +2,8 @@
 
 type files = { read : string list; modified : string list }
 
-(* The path argument every file tool shares. [glob] is deliberately not counted:
+(* The path argument every file tool shares. [glob] (a removed tool that older
+   sessions still contain) is deliberately not counted:
    its "path" is a search root and its "pattern" is not a file, so listing it
    would send the next thread hunting through directories nobody opened. *)
 let path_of_call (tc : Llm.tool_call) =

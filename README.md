@@ -8,7 +8,7 @@ no TUI, no daemon: each call is a plain Unix command that composes with pipes,
 scripts, cron, and other copies of itself.
 
 ```
-$ op --tools read,glob "what does lib/gate.mli guard against?"
+$ op --tools read,nu "what does lib/gate.mli guard against?"
 ```
 
 The design lineage is [pi](https://github.com/badlogic/pi-mono): op writes the
@@ -135,7 +135,7 @@ op --context CLAUDE.md "…"     # inject a file ahead of the prompt (repeatable
 op --image shot.png "…"        # attach an image (png, jpeg, webp, gif)
 op --model openai/gpt-5.6 "…"  # override the model for one run
 op --profile dev "…"           # pick a capability profile
-op --tools read,glob "…"       # pick a tool subset, or `none`
+op --tools read,nu "…"         # pick a tool subset, or `none`
 op --json "…"                  # result envelope only
 op --stream "…"                # session ndjson, then the envelope
 op --max-steps 3 "…"           # cap the number of tool-using turns
@@ -152,7 +152,7 @@ plain down a pipe.
 
 ### Tools
 
-The tool set is `read`, `write`, `edit`, `glob` and `nu`. A profile can set a
+The tool set is `read`, `write`, `edit` and `nu`. A profile can set a
 default subset, and `--tools` overrides it for one run. The `nu`
 tool is the only way to execute anything. There is no bash tool.
 

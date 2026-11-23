@@ -1,7 +1,7 @@
 (* The known tool names in canonical order. [--tools] selects a subset; [select]
    builds the tool list in this order regardless of the request order, and drops
    the caller-supplied nu tool when the caller did not supply it. *)
-let known = [ "read"; "write"; "edit"; "glob"; "nu" ]
+let known = [ "read"; "write"; "edit"; "nu" ]
 let err fmt = Fmt.kstr (fun s -> Error s) fmt
 
 let validate names =
@@ -13,7 +13,6 @@ let build ~nu = function
   | "read" -> Some Read.tool
   | "write" -> Some Write.tool
   | "edit" -> Some Edit.tool
-  | "glob" -> Some Glob.tool
   | "nu" -> nu
   | _ -> None
 

@@ -225,7 +225,50 @@ let check_internalcall ~modules ~plugins ~rest content =
    matter; every other shape (literals, pipes, closures delimiters, operators)
    is inert and skipped. Because flatten emits closure/block bodies as ordinary
    tokens, a call nested any depth deep is checked exactly like a top-level one. *)
-let rec walk ~externals ~modules ~plugins = function
+(* A garbage token straight after a bare command-group head ([polars], [str])
+   is an unknown subcommand: [polars scan-parquet] flattens to [polars]
+   (internalcall) then [scan-parquet] (garbage). Session data showed strong
+   models guessing polars names this way, then reading the generic syntax hint
+   as a variable-naming problem. *)
+let generic_garbage near =
+  Fmt.str
+    "the gate could not parse part of this script%s. That is usually a Nushell \
+     syntax error (a hyphenated variable/parameter name — nu wants snake_case, \
+     a stray `$` on a custom-command call, an unbalanced paren), or an \
+     external with a computed name, which is denied. Fix the syntax or call a \
+     literal toolbox command name."
+    near
+
+let subcommand_word s =
+  s <> ""
+  && String.for_all
+       (function 'a' .. 'z' | '0' .. '9' | '-' | '_' -> true | _ -> false)
+       s
+
+let unknown_subcommand ~prev garbage =
+  match prev with
+  | Some p when token_shape p = Some "shape_internalcall" -> (
+      match token_content p with
+      | Some group when subcommand_word group && subcommand_word garbage ->
+          Some group
+      | _ -> None)
+  | _ -> None
+
+let garbage_reason ~prev t =
+  match token_content t with
+  | Some c when c <> "" -> (
+      match unknown_subcommand ~prev c with
+      | Some group ->
+          err_syntax
+            "the gate could not parse part of this script near `%s`: `%s %s` \
+             is not a command. List the real `%s` subcommands with `help \
+             commands | where name starts-with '%s ' | get name`, then use one \
+             of those."
+            c group c group group
+      | None -> err_syntax "%s" (generic_garbage (" near `" ^ c ^ "`")))
+  | _ -> err_syntax "%s" (generic_garbage "")
+
+let rec walk ?prev ~externals ~modules ~plugins = function
   | [] -> Ok ()
   | t :: rest ->
       let* () =
@@ -246,23 +289,10 @@ let rec walk ~externals ~modules ~plugins = function
            PATH lock alone), but say where and steer to the common cause:
            dogfooding showed agents burning whole runs treating their own
            typos as gate policy. *)
-        | Some "shape_garbage" ->
-            let near =
-              match token_content t with
-              | Some c when c <> "" -> Fmt.str " near `%s`" c
-              | _ -> ""
-            in
-            err_syntax
-              "the gate could not parse part of this script%s. That is usually \
-               a Nushell syntax error (a hyphenated variable/parameter name — \
-               nu wants snake_case, a stray `$` on a custom-command call, an \
-               unbalanced paren), or an external with a computed name, which \
-               is denied. Fix the syntax or call a literal toolbox command \
-               name."
-              near
+        | Some "shape_garbage" -> garbage_reason ~prev t
         | _ -> Ok ()
       in
-      walk ~externals ~modules ~plugins rest
+      walk ~prev:t ~externals ~modules ~plugins rest
 
 (* op's cross-process handshake vars: [OP_DEPTH] bounds op->nu->op recursion and
    [OP_HOST_PATH] carries the real PATH a nested op restores (bin/main). A nu

@@ -33,9 +33,10 @@ type files = { read : string list; modified : string list }
 val files_of_history : Llm.message list -> files
 (** [files_of_history history] extracts the [path] argument of every read tool
     call (into {!field-read}) and every write or edit tool call (into
-    {!field-modified}) in [history]. The glob tool is excluded: its [path] is a
-    search root and its [pattern] names no file, so counting it would point the
-    next thread at directories nobody opened.
+    {!field-modified}) in [history]. Calls to the removed glob tool, which older
+    sessions contain, are excluded: its [path] is a search root and its
+    [pattern] names no file, so counting it would point the next thread at
+    directories nobody opened.
 
     Only calls whose tool result came back without an error count. A gate
     denial, a missing file or an edit whose [old_string] did not match leaves

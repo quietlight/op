@@ -229,10 +229,10 @@ let tools_conv =
 let tools_arg =
   let doc =
     "The comma-separated tool set for this run, chosen from \
-     $(b,read,write,edit,glob,nu), or $(b,none) for a tool-less chat run. Use \
-     this to pick a subset, e.g. $(b,--tools) $(i,read,write,edit,glob). \
-     Defaults to the profile's $(b,tools) list when it has one, and to all of \
-     them otherwise. An empty list or an unknown name is rejected."
+     $(b,read,write,edit,nu), or $(b,none) for a tool-less chat run. Use this \
+     to pick a subset, e.g. $(b,--tools) $(i,read,edit). Defaults to the \
+     profile's $(b,tools) list when it has one, and to all of them otherwise. \
+     An empty list or an unknown name is rejected."
   in
   Arg.(value & opt (some tools_conv) None & info [ "tools" ] ~doc ~docv:"LIST")
 

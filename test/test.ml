@@ -10,7 +10,6 @@ let () =
       Test_edit.suite;
       Test_nu.suite;
       Test_nu_sandbox.suite;
-      Test_glob.suite;
       Test_context.suite;
       Test_agent.suite;
       Test_gate.suite;

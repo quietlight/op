@@ -2,9 +2,9 @@
 
 val known : string list
 (** [known] is every built-in tool name, in canonical order:
-    [read; write; edit; glob; nu]. Used to validate [--tools], to order a
-    selection, and as the default selection when neither [--tools] nor the run's
-    profile picks one. *)
+    [read; write; edit; nu]. Used to validate [--tools], to order a selection,
+    and as the default selection when neither [--tools] nor the run's profile
+    picks one. *)
 
 val validate : string list -> (string list, string) result
 (** [validate names] is [names] when every element is a member of {!known}, and
