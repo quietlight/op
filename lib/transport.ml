@@ -92,7 +92,7 @@ let tls_host uri =
 let https_wrapper tls_config uri flow =
   Tls_eio.client_of_flow tls_config ?host:(tls_host uri) flow
 
-let request_timeout = 180.0
+let request_timeout = 300.0
 
 (* A sandbox like srt gives the child no direct network: egress must go through
    an HTTP proxy named by the standard *_PROXY env vars, and DNS is only
