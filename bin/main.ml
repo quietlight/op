@@ -442,7 +442,8 @@ let handoff_model_spec model_spec =
       | Error _ -> None)
 
 (* The run's tool set: --tools wins, then the profile's [tools] list, then
-   every known tool. --tools was validated by its cmdliner conv; the profile's
+   every known tool (a named profile without a [tools] list). With no profile
+   at all the empty profile's list is [[]], a chat run. --tools was validated by its cmdliner conv; the profile's
    list is hand-edited JSON and is validated here, so a typo fails the run
    rather than silently granting the full set. *)
 let resolve_tool_names ~tools ~(profile : Op.Config.nu_profile) =

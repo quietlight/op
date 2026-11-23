@@ -231,8 +231,9 @@ let tools_arg =
     "The comma-separated tool set for this run, chosen from \
      $(b,read,write,edit,nu), or $(b,none) for a tool-less chat run. Use this \
      to pick a subset, e.g. $(b,--tools) $(i,read,edit). Defaults to the \
-     profile's $(b,tools) list when it has one, and to all of them otherwise. \
-     An empty list or an unknown name is rejected."
+     profile's $(b,tools) list when it has one, to all of them for a profile \
+     without one, and to none when no profile is in play. An empty list or an \
+     unknown name is rejected."
   in
   Arg.(value & opt (some tools_conv) None & info [ "tools" ] ~doc ~docv:"LIST")
 
@@ -243,9 +244,9 @@ let profile_arg =
      externals, vetted modules, and plugins — and, when the profile has a \
      $(b,tools) list, the run's default tool set ($(b,\"tools\": []) makes a \
      chat profile; $(b,--tools) still overrides). Defaults to \
-     $(b,nuDefaultProfile) when set; with neither, the toolbox is empty \
-     (builtins-only Nushell). An unknown NAME is an error listing the \
-     available profiles."
+     $(b,nuDefaultProfile) when set; with neither, the run has no tools (pass \
+     $(b,--tools) or a profile for an agentic run). An unknown NAME is an \
+     error listing the available profiles."
   in
   Arg.(value & opt (some string) None & info [ "profile" ] ~doc ~docv:"NAME")
 

@@ -160,9 +160,9 @@ val context_limit : t -> float
 val resolve_nu_profile : t -> name:string option -> (nu_profile, string) result
 (** [resolve_nu_profile c ~name] Return the nu toolbox profile for a run: [name]
     (from [--profile]) or, failing that, [nuDefaultProfile] must exist in
-    [nuProfiles]; with neither set, the empty profile (no externals, no modules,
-    no plugins — a builtins-only, still-useful Nushell). The error names the
-    available profiles. *)
+    [nuProfiles]; with neither set, the empty profile: no tools (a chat run)
+    and, if [--tools] adds nu, no externals, modules or plugins. The error names
+    the available profiles. *)
 
 val parse_model_spec : string -> string option * string
 (** [parse_model_spec spec] Split a [--model] spec into an optional provider and

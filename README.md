@@ -152,8 +152,10 @@ plain down a pipe.
 
 ### Tools
 
-The tool set is `read`, `write`, `edit` and `nu`. A profile can set a
-default subset, and `--tools` overrides it for one run. The `nu`
+The tool set is `read`, `write`, `edit` and `nu`. With no profile and no
+`--tools`, a run has no tools at all: a plain chat. Ask for tools with
+`--tools` or `--profile`. A profile can set a default subset (a profile
+without a `tools` list gets all four), and `--tools` overrides it for one run. The `nu`
 tool is the only way to execute anything. There is no bash tool.
 
 ### Sessions
@@ -230,8 +232,8 @@ A profile in `nuProfiles` is the full capability knob for a run:
 | `pathMode`   | `"host"` lets allowlisted build drivers (`make`, `go`, `opam`) find their own children (`gcc`, `git`). Default is toolbox-only. |
 | `envAllow`   | Extra environment variable names passed through to the script.       |
 
-With no profile at all, the script gets a builtins-only Nushell. That is still
-useful: Nushell has a builtin for most things you would shell out for.
+With no profile at all, a run has no tools; `--tools nu` then gives the script
+a builtins-only Nushell. That is still useful: Nushell has a builtin for most things you would shell out for.
 
 Network access from a script is done by calling op itself. Add `op` to
 `externals` and a script can run `op --json "…" | from json` as a subagent.

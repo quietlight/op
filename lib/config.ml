@@ -385,9 +385,10 @@ let context_limit config =
 
 (* Resolve the nu toolbox profile for a run. An explicit or configured-default
    name must exist in [nuProfiles]; no name at all resolves to the empty
-   profile (no externals, no modules, no plugins) — the toolbox allowlist has
-   exactly one source of truth, [nuProfiles], and an unconfigured run fails
-   closed to builtins-only rather than falling back to a second list. *)
+   profile: no tools at all (a chat run), and should [--tools nu] add the nu
+   tool, no externals, modules or plugins. The toolbox allowlist has exactly
+   one source of truth, [nuProfiles], and an unconfigured run fails closed
+   rather than falling back to a second list. *)
 let resolve_nu_profile config ~name =
   let err_unknown n =
     Fmt.kstr
@@ -413,7 +414,7 @@ let resolve_nu_profile config ~name =
           plugins = [];
           path_mode = Toolbox;
           env_allow = [];
-          tools = None;
+          tools = Some [];
         }
 
 (* Replace the two default keys in place (preserving field order) and append
