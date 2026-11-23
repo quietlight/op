@@ -35,8 +35,10 @@ val entry : t -> Yojson.Safe.t -> string list
     tools degrade rather than fail: an unrecognised type renders nothing, an
     unrecognised tool falls back to a [k=v] argument summary, and missing or
     wrong-typed fields are treated as absent, so a partial or foreign log still
-    displays. Entries must be fed in order — a [toolResult] rendered before its
-    call cannot name its file. *)
+    displays. Terminal control characters in any string are scrubbed (ESC and
+    friends shown as [?], CR dropped), so text from a file the agent read cannot
+    drive the reader's terminal. Entries must be fed in order — a [toolResult]
+    rendered before its call cannot name its file. *)
 
 val footer : t -> Yojson.Safe.t -> string list
 (** [footer t envelope] renders the run's tail from the result envelope

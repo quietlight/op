@@ -81,6 +81,31 @@ let lines s =
   | parts -> (
       match List.rev parts with "" :: rest -> List.rev rest | _ -> parts)
 
+(* Terminal control characters in model text or tool output — ESC above all:
+   colours, cursor moves, an OSC 52 clipboard write, a carriage return that
+   overprints a line — would act on the reader's terminal, and a file the
+   agent read is untrusted. Every string is scrubbed before rendering: CR is
+   dropped (CRLF files stay clean), other controls show as [?]. Newline and tab
+   stay for layout; the renderer's own colours are added afterwards. *)
+let is_control c = (c < ' ' && c <> '\n' && c <> '\t') || c = '\127'
+
+let scrub_string s =
+  if not (String.exists is_control s) then s
+  else begin
+    let b = Buffer.create (String.length s) in
+    String.iter
+      (fun c ->
+        if c <> '\r' then Buffer.add_char b (if is_control c then '?' else c))
+      s;
+    Buffer.contents b
+  end
+
+let rec scrub : Yojson.Safe.t -> Yojson.Safe.t = function
+  | `String s -> `String (scrub_string s)
+  | `List l -> `List (List.map scrub l)
+  | `Assoc kv -> `Assoc (List.map (fun (k, v) -> (k, scrub v)) kv)
+  | j -> j
+
 let clip n s =
   if String.length s <= n then s
   else Util.drop_partial_utf8_tail (String.sub s 0 n) ^ "…"
@@ -389,6 +414,7 @@ let model_change t e =
   ]
 
 let entry t json =
+  let json = scrub json in
   match str "type" json with
   | Some "session" -> session_header t json
   | Some "model_change" -> model_change t json
@@ -472,6 +498,7 @@ let outcome_line t env =
     errors
 
 let footer t env =
+  let env = scrub env in
   match str "error" env with
   | Some msg ->
       let hint =

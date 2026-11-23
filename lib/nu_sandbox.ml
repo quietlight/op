@@ -39,9 +39,7 @@ let cleanup_toolbox dir =
    a stderr warning (a nu script naming a missing external will simply fail at
    runtime). The dir is the nu process's entire PATH, cleaned up at exit. *)
 let build_toolbox ~warn ~path ~externals =
-  let dir = Filename.temp_file "op-toolbox" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
+  let dir = Filename.temp_dir ~perms:0o700 "op-toolbox" "" in
   at_exit (fun () -> cleanup_toolbox dir);
   List.iter
     (fun name ->

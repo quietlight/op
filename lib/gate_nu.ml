@@ -224,6 +224,12 @@ let check_internalcall ~modules ~plugins ~rest content =
        outside the toolbox. Delegate network work via `op --json \"prompt\"` \
        and parse with `from json`."
       w
+  else if w = "history" then
+    (* No path in sight, so Layer 2's history-file pattern never fires, but
+       this reads the same file: shell history is where pasted secrets end up. *)
+    err_deny
+      "`history` is denied: shell history often holds pasted secrets. Ask the \
+       user for the command instead."
   else if w = "extern" then
     (* `extern` declares a signature for an external, and the call site then
        flattens to a bare shape_internalcall with *no* shape_external token

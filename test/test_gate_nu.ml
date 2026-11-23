@@ -108,6 +108,9 @@ let test_export_module_file_denied () =
 
 let test_module_inline_ok () = ok "module_inline"
 
+(* [history] reads shell history with no path for Layer 2 to see. *)
+let test_history_denied () = denied ~naming:"history" "history"
+
 (* [--plugin-config] on either side of an allowed plugin name would load a
    registry op did not write. *)
 let test_plugin_use_config_denied () =
@@ -481,6 +484,7 @@ let suite =
       ("module file denied", `Quick, test_module_file_denied);
       ("export module file denied", `Quick, test_export_module_file_denied);
       ("module inline ok", `Quick, test_module_inline_ok);
+      ("history denied", `Quick, test_history_denied);
       ("plugin use config denied", `Quick, test_plugin_use_config_denied);
       ("computed external denied", `Quick, test_computed_external_denied);
       ("unknown subcommand hint", `Quick, test_unknown_subcommand_hint);

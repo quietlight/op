@@ -88,6 +88,16 @@ let%expect_test "session header, model change, and a plain assistant turn" =
     Done.
     |}]
 
+let%expect_test "terminal control characters in output are scrubbed" =
+  let t = renderer () in
+  show (Render.entry t (assistant ~text:"a\027]52;c;ZXZpbA==\007b\r\nc\td" []));
+  [%expect
+    {|
+    ### ASSISTANT [m-1]  out=42 tok
+    a?]52;c;ZXZpbA==?b
+    c	d
+    |}]
+
 let%expect_test "the user echo is off for a live run and on for a replay" =
   let entry =
     json
