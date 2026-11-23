@@ -3,10 +3,12 @@ opam-version: "2.0"
 synopsis: "Minimal agentic loop"
 description: "op is a minimal agentic loop"
 maintainer: ["David Cary"]
-authors: ["David Cary, Claude, GPT, Kimi, Deepseek"]
+authors: ["David Cary, Claude, GPT, Deepseek"]
 license: "MIT"
 tags: ["agentic" "llm" "cli"]
-doc: "https://nest.pijul.com/quietlight/op"
+homepage: "https://github.com/quietlight/op"
+doc: "https://github.com/quietlight/op"
+bug-reports: "https://github.com/quietlight/op/issues"
 depends: [
   "dune" {>= "3.23"}
   "ocaml"
@@ -42,5 +44,5 @@ build: [
     "@doc" {with-doc}
   ]
 ]
-dev-repo: "git+ssh://git@tangled.org/did:plc:rikpojzh5na6m7qpibbrwaav"
+dev-repo: "git+https://github.com/quietlight/op.git"
 x-maintenance-intent: ["(latest)"]

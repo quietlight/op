@@ -9,15 +9,15 @@
 (implicit_transitive_deps false)
 
 (source
- (uri git+ssh://git@tangled.org/did:plc:rikpojzh5na6m7qpibbrwaav))
+ (github quietlight/op))
 
-(authors "David Cary, Claude, GPT, Kimi, Deepseek")
+(authors "David Cary, Claude, GPT, Deepseek")
 
 (maintainers "David Cary")
 
 (license MIT)
 
-(documentation https://nest.pijul.com/quietlight/op)
+(documentation https://github.com/quietlight/op)
 
 (package
  (name op)

@@ -45,14 +45,14 @@ same session format, so the two can read each other's history.
 ## Install
 
 ```
-git clone git@tangled.org:did:plc:rikpojzh5na6m7qpibbrwaav op
+git clone https://github.com/quietlight/op
 cd op
-opam install . --deps-only
-make build
+opam install .
 ```
 
-`make build` produces the executable and links it to `~/bin/op`. Put `~/bin`
-on your PATH if it is not already there.
+`opam install .` builds op with its dependencies and puts the `op` executable
+in your opam switch's `bin`, which is already on your PATH when the switch is
+active.
 
 ## Configure
 
@@ -262,12 +262,13 @@ through the flags documented here.
 
 ## Developing
 
-Everything goes through the Makefile.
-
-- `make check` for a fast type-check.
-- `make build` to rebuild and refresh the `~/bin/op` link.
-- `make all` runs formatting, tests and lint. It is the gate before any change
-  is done.
+```
+opam install . --deps-only --with-test
+dune build @check    # fast type-check
+dune build           # build; the executable is _build/default/bin/main.exe
+dune fmt             # format
+dune runtest         # unit and cram tests
+```
 
 ## License
 

@@ -18,3 +18,7 @@ _opam/
 .pijul/
 
 TODO.md
+
+# Kept private: local build driver and agent instructions
+Makefile
+CLAUDE.md
