@@ -28,6 +28,22 @@ let test_nu_print () =
   | Ok (_, n) -> Alcotest.failf "expected exit 0, got %d" n
   | Error e -> Alcotest.fail (Op.Nu.pp_error e)
 
+(* Output well past the cap keeps its tail and reports the true total, which
+   only the streaming tail sink can know once it has dropped the head. *)
+let test_nu_output_tail () =
+  match
+    run {|1..20000 | each {|i| $"line ($i)"} | str join "\n" | print $in|}
+  with
+  | Ok (out, 0) ->
+      Alcotest.(check bool) "keeps the tail" true (contains out "line 20000");
+      Alcotest.(check bool) "drops the head" false (contains out "line 1\n");
+      Alcotest.(check bool)
+        "notes the cut" true
+        (contains out "output truncated, showing last 30000 of");
+      Alcotest.(check bool) "bounded" true (String.length out < 30_000 + 200)
+  | Ok (_, n) -> Alcotest.failf "expected exit 0, got %d" n
+  | Error e -> Alcotest.fail (Op.Nu.pp_error e)
+
 let test_nu_pipeline () =
   (* A structured pipeline: the substrate the persona actually uses. *)
   match run {|[1 2 3] | math sum|} with
@@ -286,6 +302,7 @@ let suite =
         `Quick,
         test_plugin_note_describes_commands );
       ("nu print", `Quick, test_nu_print);
+      ("nu output tail", `Quick, test_nu_output_tail);
       ( "nu env_with replaces not appends",
         `Quick,
         test_env_with_replaces_not_appends );

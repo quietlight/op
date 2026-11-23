@@ -5,6 +5,7 @@
   cohttp
   cohttp-eio
   eio
+  cstruct
   tls
   tls-eio
   ca-certs

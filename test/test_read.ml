@@ -20,8 +20,35 @@ let test_read_offset_limit () =
       Alcotest.(check bool) "has l3" true (contains out "     3\tl3");
       Alcotest.(check bool) "omits l1" false (contains out "\tl1");
       Alcotest.(check bool) "omits l4" false (contains out "\tl4");
-      Alcotest.(check bool) "notes more" true (contains out "more lines")
+      Alcotest.(check bool)
+        "says where to continue" true
+        (contains out "more lines from offset 4")
   | Error e -> Alcotest.fail (Op.Read.pp_error e)
+
+(* The last line of the file ends the slice with no continuation note, and an
+   offset past the end reports how many lines there are. *)
+let test_read_tail_and_past_end () =
+  with_temp_dir @@ fun dir ->
+  let path = Filename.concat dir "f.txt" in
+  write_file path "l1\nl2\nl3";
+  (match Op.Read.run ~path ~offset:2 () with
+  | Ok out ->
+      Alcotest.(check bool) "unterminated last line" true (contains out "\tl3");
+      Alcotest.(check bool) "no note" false (contains out "more lines")
+  | Error e -> Alcotest.fail (Op.Read.pp_error e));
+  match Op.Read.run ~path ~offset:9 () with
+  | Ok out ->
+      Alcotest.(check string)
+        "past end" "(file has 3 lines; offset 9 is past end)" out
+  | Error e -> Alcotest.fail (Op.Read.pp_error e)
+
+(* A device never ends; reading one must be refused, not attempted. *)
+let test_read_device_refused () =
+  match Op.Read.run ~path:"/dev/zero" ~limit:1 () with
+  | Error (Op.Read.Read_error msg) ->
+      Alcotest.(check bool) "says why" true (contains msg "not a regular file")
+  | Error e -> Alcotest.fail (Op.Read.pp_error e)
+  | Ok _ -> Alcotest.fail "expected a refusal"
 
 let test_read_missing () =
   with_temp_dir @@ fun dir ->
@@ -63,4 +90,6 @@ let suite =
       ("read offset/limit", `Quick, test_read_offset_limit);
       ("read missing", `Quick, test_read_missing);
       ("read directory", `Quick, test_read_directory);
+      ("read tail and past end", `Quick, test_read_tail_and_past_end);
+      ("read device refused", `Quick, test_read_device_refused);
     ] )

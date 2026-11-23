@@ -51,6 +51,11 @@ val read_file : string -> (string, string) result
     carrying the [Sys_error] message. Callers map the error into their own
     variant; it does not distinguish missing files from directories. *)
 
+val read_file_capped : max:int -> string -> (string, string) result
+(** [read_file_capped ~max path] is {!read_file} for a regular file of at most
+    [max] bytes. Size and kind are checked before reading, so an oversized file
+    or a device is refused without being loaded. Errors name [path]. *)
+
 val next_call_id : unit -> string
 (** [next_call_id ()] is a fresh process-unique tool-call id (["call_NNNNNN"]).
     Used to synthesise ids for providers that omit them. *)

@@ -66,14 +66,10 @@ let media_type_of_bytes s =
 let load path =
   if not (Sys.file_exists path) then Fmt.error "image %s: no such file" path
   else
-    match Util.read_file path with
-    | Error e -> Fmt.error "image %s: %s" path e
+    match Util.read_file_capped ~max:max_bytes path with
+    | Error e -> Fmt.error "image %s" e
     | Ok data -> (
-        let len = String.length data in
-        if len > max_bytes then
-          Fmt.error "image %s: %d bytes exceeds the %d-byte cap" path len
-            max_bytes
-        else if len = 0 then Fmt.error "image %s: file is empty" path
+        if data = "" then Fmt.error "image %s: file is empty" path
         else
           match media_type_of_bytes data with
           | None ->

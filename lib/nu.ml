@@ -8,6 +8,10 @@
    ever runs. *)
 
 let default_timeout = 120.0
+
+(* The model picks its own timeout, so it needs a ceiling as well as a
+   default: a hung loop should not hold the run (or the machine) for hours. *)
+let max_timeout = 600
 let max_output_bytes = 30_000
 
 type modules = { names : string list; include_path : string }
@@ -90,14 +94,42 @@ let pp_error = function
       else
         Fmt.str "nu script timed out after %.0fs\nPartial output:\n%s" t output
 
-(* Keep the tail of the output: nu's span-pointed errors land at the end. *)
-let truncate_output s =
+(* The output sink keeps only the tail — nu's span-pointed errors land at the
+   end — and keeps it while the script runs, so a script printing gigabytes
+   costs at most twice [max_output_bytes] of memory: past that the buffer is
+   cut back to its last [max_output_bytes]. [total] counts every byte written,
+   for the truncation note. *)
+module Tail = struct
+  type t = { buf : Buffer.t; mutable total : int }
+
+  let single_write t bufs =
+    List.iter (fun c -> Buffer.add_string t.buf (Cstruct.to_string c)) bufs;
+    let n = Cstruct.lenv bufs in
+    t.total <- t.total + n;
+    let len = Buffer.length t.buf in
+    if len > 2 * max_output_bytes then begin
+      let tail = Buffer.sub t.buf (len - max_output_bytes) max_output_bytes in
+      Buffer.clear t.buf;
+      Buffer.add_string t.buf tail
+    end;
+    n
+
+  let copy t ~src = Eio.Flow.Pi.simple_copy ~single_write t ~src
+end
+
+let tail_sink =
+  let ops = Eio.Flow.Pi.sink (module Tail) in
+  fun t -> Eio.Resource.T (t, ops)
+
+let truncate_output (t : Tail.t) =
+  let s = Buffer.contents t.buf in
   let n = String.length s in
-  if n <= max_output_bytes then s
+  if t.total <= max_output_bytes then s
   else
-    Fmt.str "... (output truncated, showing last %d of %d bytes)\n%s"
-      max_output_bytes n
-      (String.sub s (n - max_output_bytes) max_output_bytes)
+    let kept = min n max_output_bytes in
+    Fmt.str "... (output truncated, showing last %d of %d bytes)\n%s" kept
+      t.total
+      (String.sub s (n - kept) kept)
 
 (* Spawn nu, await it, and capture output to the given sinks. Empty stdin
    (immediate EOF), same rationale as bash: a script that reads stdin fails fast
@@ -129,19 +161,18 @@ let run ~proc_mgr ~clock ?(timeout = default_timeout) ?modules ?plugins ~env
     (fun () ->
       Out_channel.with_open_bin tmp (fun oc ->
           Out_channel.output_string oc script);
-      let buf = Buffer.create 1024 in
-      let sink = Eio.Flow.buffer_sink buf in
+      let tail = { Tail.buf = Buffer.create 1024; total = 0 } in
+      let sink = tail_sink tail in
       let status =
         spawn_capture ~proc_mgr ~clock ~timeout ~env ~executable ~stdout:sink
           ~stderr:sink
           (("nu" :: base_flags ?modules ?plugins ()) @ [ tmp ])
       in
-      let output () = truncate_output (Buffer.contents buf) in
+      let output () = truncate_output tail in
       match status with
       | Ok (`Exited n) -> Ok (output (), n)
       | Ok (`Signaled n) -> Ok (output (), 128 + n)
-      | Error `Timeout ->
-          Error (Timeout (timeout, truncate_output (Buffer.contents buf)))
+      | Error `Timeout -> Error (Timeout (timeout, truncate_output tail))
       | Error (`Spawn msg) -> Error (Spawn_error msg))
 
 let ast_timeout = 30.0
@@ -385,7 +416,8 @@ let tool ~proc_mgr ~clock ?version ?modules ?plugins ~env ~executable ~externals
                   `Assoc
                     [
                       ("type", `String "integer");
-                      ("description", `String "Timeout in seconds (default 120)");
+                      ( "description",
+                        `String "Timeout in seconds (default 120, max 600)" );
                     ] );
               ] );
           ("required", `List [ `String "script" ]);
@@ -397,7 +429,7 @@ let tool ~proc_mgr ~clock ?version ?modules ?plugins ~env ~executable ~externals
         | Ok script -> (
             let timeout =
               match Tool.optional_int args "timeout" with
-              | Some n when n > 0 -> Some (float_of_int n)
+              | Some n when n > 0 -> Some (float_of_int (min n max_timeout))
               | _ -> None
             in
             match

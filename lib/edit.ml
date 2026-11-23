@@ -56,11 +56,17 @@ let replace_all_sub ~sub ~by s =
   loop 0;
   Buffer.contents buf
 
+(* Edit holds the whole file in memory (twice, while replacing), so it refuses
+   anything past a size no hand-edited text file reaches. *)
+let max_file_bytes = 16 * 1024 * 1024
+
 let read_file path =
   if not (Sys.file_exists path) then Error (Not_found path)
   else if Sys.is_directory path then
     Error (Read_error (path ^ ": is a directory"))
-  else Util.read_file path |> Result.map_error (fun msg -> Read_error msg)
+  else
+    Util.read_file_capped ~max:max_file_bytes path
+    |> Result.map_error (fun msg -> Read_error msg)
 
 let write_file path content =
   try

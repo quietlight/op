@@ -141,6 +141,17 @@ let read_file path =
   try Ok (In_channel.with_open_bin path In_channel.input_all)
   with Sys_error msg -> Error msg
 
+(* [read_file] guarded by a stat taken before anything is read: a stray path to
+   a 30 GB dataset, or to a device that never ends, costs nothing. *)
+let read_file_capped ~max path =
+  match Unix.stat path with
+  | { st_kind = S_REG; st_size; _ } when st_size > max ->
+      Fmt.error "%s: %d bytes exceeds the %d-byte cap" path st_size max
+  | { st_kind = S_REG; _ } -> read_file path
+  | _ -> Fmt.error "%s: not a regular file" path
+  | exception Unix.Unix_error (e, _, _) ->
+      Fmt.error "%s: %s" path (Unix.error_message e)
+
 (* A process-global monotonic counter for synthesising unique tool-call ids.
    Some providers (older Gemini models) omit call
    ids, and a naive hash of (name, args) collides when a model repeats the same

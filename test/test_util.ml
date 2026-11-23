@@ -141,9 +141,30 @@ let test_utf8_idempotent () =
 let test_utf8_empty () =
   Alcotest.(check string) "empty unchanged" "" (Op.Util.to_valid_utf8 "")
 
+(* The capped read refuses before loading: an oversized file and a device
+   (which never ends) are both errors, a small regular file reads whole. *)
+let test_read_file_capped () =
+  Test_support.with_temp_dir @@ fun dir ->
+  let path = Filename.concat dir "f" in
+  Test_support.write_file path "12345";
+  Alcotest.(check (result string string))
+    "fits" (Ok "12345")
+    (Op.Util.read_file_capped ~max:5 path);
+  (match Op.Util.read_file_capped ~max:4 path with
+  | Error e ->
+      Alcotest.(check bool) "over cap" true (Test_support.contains e "cap")
+  | Ok _ -> Alcotest.fail "expected the cap to refuse");
+  match Op.Util.read_file_capped ~max:4 "/dev/zero" with
+  | Error e ->
+      Alcotest.(check bool)
+        "device" true
+        (Test_support.contains e "not a regular file")
+  | Ok _ -> Alcotest.fail "expected a device to be refused"
+
 let suite =
   ( "util",
     [
+      ("read file capped", `Quick, test_read_file_capped);
       ("utf8 valid unchanged", `Quick, test_utf8_valid_unchanged);
       ("utf8 split multibyte", `Quick, test_utf8_split_multibyte);
       ("utf8 stray bytes", `Quick, test_utf8_stray_bytes);

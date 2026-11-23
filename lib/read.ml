@@ -21,21 +21,41 @@ let pp_error = function
   | Is_directory path -> Fmt.str "%s: is a directory" path
   | Read_error msg -> msg
 
-let file_contents path =
-  if not (Sys.file_exists path) then Error (Not_found path)
-  else if Sys.is_directory path then Error (Is_directory path)
-  else Util.read_file path |> Result.map_error (fun msg -> Read_error msg)
+(* Open [path] only if it is a regular file: a device ([/dev/zero]) never
+   ends and a FIFO blocks, and neither is a file anyone means to page through. *)
+let open_regular path =
+  match (Unix.stat path).st_kind with
+  | S_REG -> (
+      try Ok (open_in_bin path) with Sys_error msg -> Error (Read_error msg))
+  | S_DIR -> Error (Is_directory path)
+  | _ -> Error (Read_error (path ^ ": not a regular file"))
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Error (Not_found path)
+  | exception Unix.Unix_error (e, _, _) ->
+      Error (Read_error (path ^ ": " ^ Unix.error_message e))
 
-(* Split file contents into lines, dropping the trailing empty element that a
-   final newline produces. An empty file yields no lines. *)
-let lines_of_string content =
-  if content = "" then [||]
-  else
-    let parts = String.split_on_char '\n' content in
-    let parts =
-      match List.rev parts with "" :: rest -> List.rev rest | _ -> parts
-    in
-    Array.of_list parts
+(* The next line of [ic] without its newline, or None at end of file. Only the
+   first [max_line_length] bytes (plus one, so [truncate_line] knows it was
+   cut) are kept: the file is streamed, so neither a huge file nor one huge
+   line costs more memory than a short one. A final newline ends the last line
+   rather than starting an empty one. *)
+let next_line ic =
+  let buf = Buffer.create 128 in
+  let rec go any =
+    match In_channel.input_char ic with
+    | None -> if any then Some (Buffer.contents buf) else None
+    | Some '\n' -> Some (Buffer.contents buf)
+    | Some c ->
+        if Buffer.length buf <= max_line_length then Buffer.add_char buf c;
+        go true
+  in
+  go false
+
+(* Skip up to [n] lines; the number actually skipped. *)
+let skip_lines ic n =
+  let rec go k =
+    if k < n && Option.is_some (next_line ic) then go (k + 1) else k
+  in
+  go 0
 
 (* A long line is cut at a byte offset, so back the cut up to a character
    boundary rather than emitting half a codepoint. *)
@@ -43,45 +63,52 @@ let truncate_line s =
   if String.length s <= max_line_length then s
   else Util.drop_partial_utf8_tail (String.sub s 0 max_line_length) ^ "..."
 
-let run ~path ?(offset = 1) ?(limit = default_limit) () =
-  let* content = file_contents path in
-  let lines = lines_of_string content in
-  let total = Array.length lines in
-  let start_idx = max 0 (offset - 1) in
-  if total = 0 then Ok ""
-  else if start_idx >= total then
-    Fmt.kstr
-      (fun s -> Ok s)
-      "(file has %d lines; offset %d is past end)" total offset
-  else begin
-    let last_idx = min (total - 1) (start_idx + max 1 limit - 1) in
+(* Emit lines from line number [first] until [limit] lines are out, the byte
+   budget is reached or the file ends; the number of the last line emitted.
+   The running [bytes] count is tracked directly (the line body plus ~8 bytes
+   of number/tab/newline) rather than read off the buffer, since the Format
+   engine may not have flushed to it yet. *)
+let emit_lines ppf ic ~first ~limit =
+  let rec go n bytes =
+    if n >= first + limit || bytes >= max_total_bytes then n - 1
+    else
+      match next_line ic with
+      | None -> n - 1
+      | Some line ->
+          let line = truncate_line line in
+          Fmt.pf ppf "%6d\t%s\n" n line;
+          go (n + 1) (bytes + String.length line + 8)
+  in
+  go first 0
+
+let slice ic ~offset ~limit =
+  let first = max 1 offset in
+  let skipped = skip_lines ic (first - 1) in
+  if skipped < first - 1 then
+    if skipped = 0 then ""
+    else Fmt.str "(file has %d lines; offset %d is past end)" skipped offset
+  else
     let buf = Buffer.create 256 in
     let ppf = Fmt.with_buffer buf in
-    (* Emit lines until the requested slice ends or the byte budget is reached,
-       whichever comes first; returns the index of the last line emitted. The
-       running [bytes] count is tracked directly (the line body plus ~8 bytes of
-       number/tab/newline) rather than read off the buffer, since the Format
-       engine may not have flushed to it yet. *)
-    let bytes = ref 0 in
-    let rec emit i =
-      if i > last_idx || !bytes >= max_total_bytes then i - 1
-      else begin
-        let line = truncate_line lines.(i) in
-        Fmt.pf ppf "%6d\t%s\n" (i + 1) line;
-        bytes := !bytes + String.length line + 8;
-        emit (i + 1)
-      end
-    in
-    let shown = emit start_idx in
-    let remaining = total - 1 - shown in
-    if shown < last_idx then
-      Fmt.pf ppf "... (%d more lines; output truncated at %d bytes)\n" remaining
-        max_total_bytes
-    else if last_idx < total - 1 then
-      Fmt.pf ppf "... (%d more lines)\n" remaining;
+    let limit = max 1 limit in
+    let last = emit_lines ppf ic ~first ~limit in
+    (* Whether more follows is one more line away; the remainder is never
+       counted, which would mean reading the rest of a possibly huge file. *)
+    if Option.is_some (next_line ic) then
+      if last < first + limit - 1 then
+        Fmt.pf ppf
+          "... (more lines from offset %d; output truncated at %d bytes)\n"
+          (last + 1) max_total_bytes
+      else Fmt.pf ppf "... (more lines from offset %d)\n" (last + 1);
     Fmt.flush ppf ();
-    Ok (Buffer.contents buf)
-  end
+    Buffer.contents buf
+
+let run ~path ?(offset = 1) ?(limit = default_limit) () =
+  let* ic = open_regular path in
+  Ok
+    (Fun.protect
+       ~finally:(fun () -> close_in_noerr ic)
+       (fun () -> slice ic ~offset ~limit))
 
 let tool : Tool.t =
   {

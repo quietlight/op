@@ -32,6 +32,7 @@
   yojson
   eio
   eio_main
+  cstruct
   cohttp
   cohttp-eio
   tls
