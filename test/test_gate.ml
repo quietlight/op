@@ -49,7 +49,14 @@ let test_paths () =
   allow "top-level skills is an ordinary path"
     (path_tc "write" (cwd ^ "/skills/x.md"));
   deny "cwd/.op is no longer allowlisted"
-    (path_tc "write" (cwd ^ "/.op/agent/skills/x.md"))
+    (path_tc "write" (cwd ^ "/.op/agent/skills/x.md"));
+  (* op's own environment, API keys included *)
+  deny "proc environ" (path_tc "read" "/proc/self/environ");
+  deny "proc via .." (path_tc "read" "/tmp/../proc/1/cmdline");
+  allow "proc deeper in a data path" (path_tc "read" "/mnt/x/proc/a.csv");
+  deny "non-dot secret on a data drive"
+    (path_tc "read" "/mnt/backup/server.pem");
+  deny "terraform state" (path_tc "edit" "infra/terraform.tfstate")
 
 (* --- sensitive_path_re: the secret-path pattern shared with Gate_nu --- *)
 
@@ -68,7 +75,12 @@ let test_sensitive_paths_match () =
   hits "typesafe api key (nu_plugin_jev)" "open ~/.config/typesafe/api_key";
   hits "zsh history" "open ~/.zsh_history";
   hits "bash history" "open ~/.bash_history";
-  hits "psql history" "open ~/.psql_history"
+  hits "psql history" "open ~/.psql_history";
+  hits "op settings" "open ~/.op_global/agent/settings.json";
+  hits "huggingface token" "open ~/.cache/huggingface/token";
+  hits "rclone config" "open ~/.config/rclone/rclone.conf";
+  hits "proc environ" "open /proc/self/environ";
+  hits "quoted proc" "open '/proc/1/environ'"
 
 let test_sensitive_path_near_misses () =
   let misses name s =
@@ -81,7 +93,9 @@ let test_sensitive_path_near_misses () =
   misses "himalayan is not himalaya" "open ~/.config/himalayan/notes";
   misses "typesafety is not typesafe" "open ~/.config/typesafety/x";
   misses "history.md is not a history file" "open docs/history.md";
-  misses "undotted npmrc mention" "grep npmrc README.md"
+  misses "undotted npmrc mention" "grep npmrc README.md";
+  misses "proc inside a data path" "open /mnt/data/proc/x.csv";
+  misses "op sessions are not agent config" "ls ~/.op_global/sessions"
 
 (* --- window: one-shot flagged-call reminder --- *)
 

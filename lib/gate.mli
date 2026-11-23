@@ -24,9 +24,10 @@
       a symlink under an allowed directory pointing at a protected one is not
       caught.
     - {b no working-directory containment}: the path rules only deny
-      dot-prefixed segments; [read]/[write]/[edit] on any other path outside
-      [cwd] are allowed, so a confused or injected model can touch non-dot files
-      anywhere the process itself can reach.
+      dot-prefixed segments and {!sensitive_path_re} matches (which include
+      [/proc]); [read]/[write]/[edit] on any other path outside [cwd] are
+      allowed, so a confused or injected model can touch non-dot files anywhere
+      the process itself can reach.
     - {b no per-tool scoping}: the gate is global, not per-agent-persona.
     - {b layer 2 is a substring match}: {!sensitive_path_re} is applied to
       script {e source text}, so it only sees paths written literally. A path
@@ -60,8 +61,9 @@ type nu_gate = script:string -> verdict
 
 val sensitive_path_re : Re.re
 (** The compiled "references a secret-bearing path" pattern (ssh keys, cloud
-    credentials, [.env], …). Exposed so {!Gate_nu}'s layer-2 text check denies a
-    nu script that names such a path. *)
+    credentials, [.env], [/proc], …). The file tools' path rule applies it to
+    the normalized path; exposed so {!Gate_nu}'s layer-2 text check denies a nu
+    script that names such a path. *)
 
 type t
 (** A gate value holding the (mutable) sliding window of recent calls. *)

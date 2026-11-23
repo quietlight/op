@@ -207,14 +207,17 @@ and rejects anything the profile does not allow:
   `source`, `plugin` and friends)
 
 Scripts that name sensitive paths (ssh keys, cloud credentials, `.env`, shell
-history) or write dot-files are denied too. That check is a text match on the
-script, so it stops an incidental read, not a determined one.
+history, `/proc`) or write dot-files are denied too. That check is a text match
+on the script, so it stops an incidental read, not a determined one. The file
+tools refuse the same paths, and any path with a dot-prefixed segment.
 
 The script then runs with a PATH containing only the profile's externals, and
 an environment that is an allowlist, not an inheritance. Only `HOME`, `USER`,
 `LOGNAME`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `TZ`, op's own `OP_*` variables
 and whatever the profile's `envAllow` names get through. A stray
-`ANTHROPIC_API_KEY` or `SSH_AUTH_SOCK` never reaches a script.
+`ANTHROPIC_API_KEY` or `SSH_AUTH_SOCK` is not in the script's environment.
+(op's own environment is still readable under `/proc`, which is why that path
+is refused — by the same best-effort text match.)
 
 This is a guardrail for a cooperative model, not a sandbox against a hostile
 one. For untrusted work, wrap op in a real sandbox as well.

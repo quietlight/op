@@ -75,18 +75,15 @@ let normalize_segments abs =
        []
   |> List.rev
 
-let path_verdict ~cwd raw =
-  let abs = if Filename.is_relative raw then Filename.concat cwd raw else raw in
-  let segs = normalize_segments abs in
-  if List.exists (fun s -> String.length s > 0 && s.[0] = '.') segs then
-    Fmt.kstr (fun s -> Deny s) "path %s is protected (dot-file)" raw
-  else Allow
-
 (* --- shared with Gate_nu ---------------------------------------------- *)
 
-(* Secret-bearing paths: a nu script could [open] them and read/write tools
-   could otherwise touch the non-dot ones, so {!Gate_nu}'s layer-2 text check
-   denies a script naming one. The history entry is deliberately broad
+(* Secret-bearing paths: a nu script could [open] them and the file tools could
+   otherwise touch the non-dot ones ([server.pem], [terraform.tfstate]), so
+   {!path_verdict} denies a file-tool path matching one and {!Gate_nu}'s
+   layer-2 text check denies a script naming one. [/proc] is here because
+   [/proc/self/environ] (or the parent's, from nu) is op's whole inherited
+   environment, API keys included; the leading anchor keeps a data path like
+   [/mnt/x/proc/] out. The history entry is deliberately broad
    ([.bash_history], [.zsh_history], [.psql_history], bare [.history]): pasted
    secrets end up in all of them. [.config/gh] is gh's token store; the trailing \b keeps
    [.config/ghostty] and friends out. [.config/himalaya] is the mail config:
@@ -95,7 +92,21 @@ let path_verdict ~cwd raw =
    runs it through [/bin/sh] itself. *)
 let sensitive_path_re =
   Re.Perl.compile_pat ~opts:[ `Caseless ]
-    {|(\.ssh\b|id_(rsa|dsa|ecdsa|ed25519)|\.aws/credentials|\.netrc\b|\.gnupg\b|\.env\b|\.op_global/agent/models|\.pem\b|\.kube/config|\.docker/config|\.npmrc\b|\.git-credentials\b|\.config/gh\b|\.pgpass\b|\.config/gcloud\b|\.config/himalaya\b|\.config/typesafe\b|terraform\.tfstate|\.[a-z_]*history\b)|}
+    {|(\.ssh\b|id_(rsa|dsa|ecdsa|ed25519)|\.aws/credentials|\.netrc\b|\.gnupg\b|\.env\b|\.op_global/agent\b|\.pem\b|\.p12\b|\.pfx\b|\.kube/config|\.docker/config|\.npmrc\b|\.pypirc\b|\.cargo/credentials|\.git-credentials\b|\.config/gh\b|\.pgpass\b|\.config/gcloud\b|\.config/himalaya\b|\.config/typesafe\b|\.config/rclone\b|\.cache/huggingface\b|\.kaggle\b|\.azure\b|\.vault-token\b|\.local/share/keyrings\b|terraform\.tfstate|\.[a-z_]*history\b|(^|[\s'"(])/proc\b)|}
+
+let path_verdict ~cwd raw =
+  let abs = if Filename.is_relative raw then Filename.concat cwd raw else raw in
+  let segs = normalize_segments abs in
+  if List.exists (fun s -> String.length s > 0 && s.[0] = '.') segs then
+    Fmt.kstr (fun s -> Deny s) "path %s is protected (dot-file)" raw
+  else
+    match Re.exec_opt sensitive_path_re ("/" ^ String.concat "/" segs) with
+    | Some g ->
+        Fmt.kstr
+          (fun s -> Deny s)
+          "path %s is protected (secret-bearing: `%s`)" raw
+          (String.trim (Re.Group.get g 0))
+    | None -> Allow
 
 (* --- dispatch + window ------------------------------------------------ *)
 
