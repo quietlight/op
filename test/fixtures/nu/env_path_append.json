@@ -1,0 +1,50 @@
+[
+  {
+    "content": "$env",
+    "shape": "shape_variable",
+    "span": {
+      "start": 0,
+      "end": 4
+    }
+  },
+  {
+    "content": "PATH",
+    "shape": "shape_string",
+    "span": {
+      "start": 5,
+      "end": 9
+    }
+  },
+  {
+    "content": "++=",
+    "shape": "shape_operator",
+    "span": {
+      "start": 10,
+      "end": 13
+    }
+  },
+  {
+    "content": "[",
+    "shape": "shape_list",
+    "span": {
+      "start": 14,
+      "end": 15
+    }
+  },
+  {
+    "content": "\"./x\"",
+    "shape": "shape_string",
+    "span": {
+      "start": 15,
+      "end": 20
+    }
+  },
+  {
+    "content": "]",
+    "shape": "shape_list",
+    "span": {
+      "start": 20,
+      "end": 21
+    }
+  }
+]

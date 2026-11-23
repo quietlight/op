@@ -129,13 +129,13 @@ let test_unknown_subcommand_hint () =
     ~naming:"help commands | where name starts-with 'polars '"
     "unknown_subcommand"
 
-(* Setting op's cross-process handshake vars (OP_DEPTH / OP_HOST_PATH) in an env
-   record hands a nested op a forged value — resetting op's op->nu->op recursion
-   guard when `op` is a toolbox external. The write is denied in both the record
-   ({OP_DEPTH: "0"}) and list ([OP_DEPTH "0"]) forms; a *read*
-   ({PATH: $env.OP_HOST_PATH}, to pass PATH through) is legitimate and allowed —
-   the token before the name is a shape_variable there, not a record/list
-   delimiter. Fixtures are real nu-0.114 flattens of the with-env constructs. *)
+(* Protected env vars (OP_DEPTH, OP_HOST_PATH, PATH) may be read as
+   [$env.NAME] and nothing else. Setting op's handshake vars hands a nested op
+   a forged value (resetting its recursion guard); setting PATH lets a copied
+   binary run under an allowed external's name. Every write spelling is
+   denied: record and list keys, [$env.NAME =] (quoted, member and [++=]
+   forms), [hide-env], [insert]. Comparisons and pipelines off [$env.NAME] are
+   reads. *)
 let test_handshake_write_record_denied () =
   denied ~naming:"OP_DEPTH" "handshake_write_record"
 
@@ -143,6 +143,24 @@ let test_handshake_write_list_denied () =
   denied ~naming:"OP_DEPTH" "handshake_write_list"
 
 let test_handshake_read_ok () = ok "handshake_read"
+
+let test_env_writes_denied () =
+  List.iter
+    (fun (name, fixture) -> denied ~naming:name fixture)
+    [
+      ("OP_DEPTH", "env_depth_assign");
+      ("OP_DEPTH", "env_depth_quoted_assign");
+      ("OP_DEPTH", "env_hide_depth");
+      ("OP_DEPTH", "env_insert_depth");
+      ("PATH", "env_path_assign");
+      ("PATH", "env_path_append");
+      ("PATH", "env_path_member_assign");
+      ("PATH", "env_path_record");
+    ]
+
+let test_env_path_reads_ok () =
+  ok "env_path_read";
+  ok "env_path_compare"
 
 (* Guard against a false positive: an external with an interpolated argument
    followed by a flag (`op $"(...)" --json`) is a legitimate toolbox call, not a
@@ -471,6 +489,8 @@ let suite =
         test_handshake_write_record_denied );
       ("handshake write list denied", `Quick, test_handshake_write_list_denied);
       ("handshake read ok", `Quick, test_handshake_read_ok);
+      ("env writes denied", `Quick, test_env_writes_denied);
+      ("env path reads ok", `Quick, test_env_path_reads_ok);
       ("op interp arg ok", `Quick, test_op_interp_ok);
       ( "sensitive open passes layer 1",
         `Quick,

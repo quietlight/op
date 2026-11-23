@@ -1,90 +1,26 @@
 [
   {
-    "content": "with-env",
+    "content": "print",
     "shape": "shape_internalcall",
     "span": {
       "start": 0,
-      "end": 8
-    }
-  },
-  {
-    "content": "{",
-    "shape": "shape_record",
-    "span": {
-      "start": 9,
-      "end": 10
-    }
-  },
-  {
-    "content": "PATH",
-    "shape": "shape_string",
-    "span": {
-      "start": 10,
-      "end": 14
-    }
-  },
-  {
-    "content": ": ",
-    "shape": "shape_record",
-    "span": {
-      "start": 14,
-      "end": 16
+      "end": 5
     }
   },
   {
     "content": "$env",
     "shape": "shape_variable",
     "span": {
-      "start": 16,
-      "end": 20
+      "start": 6,
+      "end": 10
     }
   },
   {
     "content": "OP_HOST_PATH",
     "shape": "shape_string",
     "span": {
-      "start": 21,
-      "end": 33
-    }
-  },
-  {
-    "content": "}",
-    "shape": "shape_record",
-    "span": {
-      "start": 33,
-      "end": 34
-    }
-  },
-  {
-    "content": "{ ^",
-    "shape": "shape_closure",
-    "span": {
-      "start": 35,
-      "end": 38
-    }
-  },
-  {
-    "content": "op",
-    "shape": "shape_external",
-    "span": {
-      "start": 38,
-      "end": 40
-    }
-  },
-  {
-    "content": "x",
-    "shape": "shape_externalarg",
-    "span": {
-      "start": 41,
-      "end": 42
-    }
-  },
-  {
-    "content": " }",
-    "shape": "shape_closure",
-    "span": {
-      "start": 42,
-      "end": 44
+      "start": 11,
+      "end": 23
     }
   }
 ]

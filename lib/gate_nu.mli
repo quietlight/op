@@ -28,6 +28,10 @@
       loading a file, [plugin] except a bare [plugin use] of a profile plugin,
       or [use] of anything but the standard library or a vetted profile module)
       is denied outright. An [export] prefix is judged as the command after it.
+      The protected environment variables ([OP_DEPTH], [OP_HOST_PATH], [PATH])
+      may only be read as [$env.NAME]: any other literal mention (a record key,
+      [$env.NAME = …], [hide-env]) is a write and is denied, since a forged
+      [PATH] would let a copied binary run under an allowed external's name.
       [job] is allowed: job closures are flattened and walked like any other
       code, and nu kills background jobs at script exit, so they add no
       capability and cannot outlive the tool call.

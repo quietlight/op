@@ -167,16 +167,17 @@ let child_env ~host_env ~child_path ~host_path ~depth ~profile_name ~externals
         "OP_NU_MODULES=" ^ String.concat "," module_names;
       ])
 
-(* Ensure the empty env/config stubs that replace [--no-config-file] (which
-   hard-disables the plugin registry in nu 0.114); returns the stub dir. *)
+(* Write the empty env/config stubs that replace [--no-config-file] (which
+   hard-disables the plugin registry in nu 0.114); returns the stub dir. They
+   are truncated on every run, not just created: nu runs them ungated before
+   each script, so a stub that had gained content would be code planted once
+   and run forever. *)
 let ensure_stub_dir agent_dir =
   let stub_dir = Filename.concat agent_dir "nu-stubs" in
   (try Unix.mkdir stub_dir 0o700
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
   List.iter
-    (fun f ->
-      let p = Filename.concat stub_dir f in
-      if not (Sys.file_exists p) then Out_channel.with_open_bin p (fun _ -> ()))
+    (fun f -> Out_channel.with_open_bin (Filename.concat stub_dir f) ignore)
     [ "env.nu"; "config.nu" ];
   stub_dir
 

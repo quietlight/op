@@ -332,13 +332,15 @@ let rec walk ?prev ~externals ~modules ~plugins = function
       in
       walk ~prev:t ~externals ~modules ~plugins rest
 
-(* op's cross-process handshake vars: [OP_DEPTH] bounds op->nu->op recursion and
-   [OP_HOST_PATH] carries the real PATH a nested op restores (bin/main). A nu
-   script that *sets* either — [with-env {OP_DEPTH: "0"} { ^op … }] — hands the
-   nested op a forged value, resetting the recursion guard (a cost/DoS runaway)
-   or redirecting its PATH. Reading them ([$env.OP_HOST_PATH], to pass PATH
-   through) is legitimate and untouched. *)
-let protected_handshake = [ "OP_DEPTH"; "OP_HOST_PATH" ]
+(* Environment variables a script may read but never set or hide:
+   - [OP_DEPTH] bounds op->nu->op recursion and [OP_HOST_PATH] carries the real
+     PATH a nested op restores (bin/main). Forging either resets the recursion
+     guard (a cost runaway) or points a nested op at planted binaries.
+   - [PATH] (nu's [Path] on Windows): the walk vets an external by name, so a
+     script that copies any binary to [./x/git] and puts [./x] on PATH runs it
+     as the allowed [git]. A nested op restores the host PATH itself, so
+     scripts have no need to set it. *)
+let protected_env = [ "OP_DEPTH"; "OP_HOST_PATH"; "PATH"; "Path" ]
 
 (* A record/list key strips to its bare name: nu reports a quoted key's
    [content] with the quotes ([{"OP_DEPTH": …}] -> ["OP_DEPTH"]). *)
@@ -350,41 +352,67 @@ let strip_quotes s =
   then String.sub s 1 (n - 2)
   else s
 
-(* Deny a write to a protected handshake var. The write vs. read distinction is
-   the preceding token's shape: a record/list *key* follows a [shape_record]
-   ({, :) or [shape_list] ([, space) delimiter, whereas a read [$env.OP_DEPTH]
-   has the name follow a [shape_variable]. A key whose name is computed
-   ([{($"OP_(x)"): …}]) is a residual — it is no longer a literal string token —
-   consistent with the gate leaning on Layer 1 for hard guarantees. *)
-let check_handshake_writes tokens =
-  let is_delim = function
-    | Some "shape_record" | Some "shape_list" -> true
-    | _ -> false
-  in
-  let rec go prev_shape = function
+let assign_ops = [ "="; "+="; "-="; "*="; "/="; "++=" ]
+
+(* After [$env.NAME], skip cell-path members ([.0]) to the token that says
+   what happens to it: an assignment operator makes it a write. *)
+let rec assigned = function
+  | t :: rest
+    when match token_shape t with
+         | Some ("shape_int" | "shape_string") -> true
+         | _ -> false ->
+      assigned rest
+  | t :: _ ->
+      token_shape t = Some "shape_operator"
+      && Option.fold ~none:false
+           ~some:(fun op -> List.mem op assign_ops)
+           (token_content t)
+  | [] -> false
+
+let env_read ~prev rest =
+  (match prev with
+    | Some p ->
+        token_shape p = Some "shape_variable" && token_content p = Some "$env"
+    | None -> false)
+  && not (assigned rest)
+
+(* Deny a protected name anywhere but a plain read [$env.NAME]: a record or
+   list key ([with-env], [load-env]), an [insert]/[hide-env] argument, or
+   [$env.NAME = …]. One rule instead of a list of write forms; the price is
+   that [$env | get PATH] is refused too, and the deny steers to the read
+   form. A name computed at runtime ([$"OP_(x)"]) is no literal token and
+   escapes, as everything in Layer 2 does. *)
+let check_env_writes tokens =
+  let rec go prev = function
     | [] -> Ok ()
     | t :: rest ->
         let* () =
           match (token_shape t, token_content t) with
           | Some "shape_string", Some c
-            when is_delim prev_shape
-                 && List.mem (strip_quotes c) protected_handshake ->
+            when List.mem (strip_quotes c) protected_env
+                 && not (env_read ~prev rest) ->
+              let name = strip_quotes c in
               err_deny
-                "setting the op handshake variable `%s` is denied: a nested op \
-                 would inherit the forged value, resetting op's op->nu->op \
-                 recursion guard (or its restored PATH). Remove it from the \
-                 env record."
-                (strip_quotes c)
+                "`%s` may only be read (`$env.%s`) in the nu tool; setting or \
+                 hiding it is denied: %s"
+                name name
+                (if starts_with ~prefix:"OP_" name then
+                   "a nested op would inherit the forged value, resetting op's \
+                    recursion guard or its restored PATH."
+                 else
+                   "the gate vets externals by name, so a rewritten PATH could \
+                    run any binary under an allowed name. A nested op restores \
+                    the host PATH itself.")
           | _ -> Ok ()
         in
-        go (token_shape t) rest
+        go (Some t) rest
   in
   go None tokens
 
 let analyze_tokens ~externals ~modules ~plugins ast =
   match ast with
   | `List tokens ->
-      let* () = check_handshake_writes tokens in
+      let* () = check_env_writes tokens in
       walk ~externals ~modules ~plugins tokens
   | _ -> Ok ()
 
