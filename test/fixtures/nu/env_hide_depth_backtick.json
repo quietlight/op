@@ -1,0 +1,18 @@
+[
+  {
+    "content": "hide-env",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 0,
+      "end": 8
+    }
+  },
+  {
+    "content": "`OP_DEPTH`",
+    "shape": "shape_string",
+    "span": {
+      "start": 9,
+      "end": 19
+    }
+  }
+]

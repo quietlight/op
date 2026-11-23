@@ -40,6 +40,12 @@ val entry : t -> Yojson.Safe.t -> string list
     drive the reader's terminal. Entries must be fed in order — a [toolResult]
     rendered before its call cannot name its file. *)
 
+val scrub_string : string -> string
+(** [scrub_string s] is [s] with terminal control characters made inert: CR
+    dropped, other C0 controls and DEL shown as [?], newline and tab kept. For
+    any other human-facing print of session text ([--list] previews, a handoff
+    document). *)
+
 val footer : t -> Yojson.Safe.t -> string list
 (** [footer t envelope] renders the run's tail from the result envelope
     ({!Run_report.result_json} or {!Run_report.error_json}): outcome, turn and

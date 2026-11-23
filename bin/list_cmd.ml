@@ -88,7 +88,8 @@ let list_sessions ~json limit =
           List.iter
             (fun (s : Op.Session_list.summary) ->
               Fmt.pr "%-36s  %-11s  %4d  %s\n" s.id (human_time s.timestamp)
-                s.count s.summary)
+                s.count
+                (Op.Render.scrub_string s.summary))
             sessions;
           truncated_hint ~json ~omitted;
           if tty then
@@ -118,7 +119,8 @@ let list_messages ~json session limit =
           List.iter
             (fun (e : Op.Session_list.entry_summary) ->
               let mark = if e.is_fork then "*" else " " in
-              Fmt.pr "%-2s %-8s %-9s  %s\n" mark e.id e.role e.preview)
+              Fmt.pr "%-2s %-8s %-9s  %s\n" mark e.id e.role
+                (Op.Render.scrub_string e.preview))
             entries;
           truncated_hint ~json ~omitted;
           if tty then
@@ -152,7 +154,8 @@ let list_branches ~json session limit =
           List.iter
             (fun (b : Op.Session_list.branch_tip) ->
               Fmt.pr "%-8s %-11s %-9s  %s\n" b.tip (human_time b.timestamp)
-                b.role b.preview)
+                b.role
+                (Op.Render.scrub_string b.preview))
             branches;
           truncated_hint ~json ~omitted;
           if tty then

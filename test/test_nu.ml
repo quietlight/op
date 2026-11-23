@@ -295,6 +295,36 @@ let test_plugin_note_describes_commands () =
     "no plugins, no note" ""
     (Op.Nu.For_testing.plugin_note None)
 
+(* The gate denies by name, and Nushell grows builtins between releases (run,
+   run-internal and % dispatch arrived after 0.114, each a way past the gate).
+   So the reviewed catalogue is pinned: a builtin the installed nu has and the
+   snapshot lacks fails here until someone checks whether it runs programs,
+   loads files or reaches the network (deny it in Gate_nu if so), then adds
+   it to fixtures/nu/builtins.txt. Builtins the snapshot has and nu lacks are
+   fine: an older nu. *)
+let test_nu_builtins_reviewed () =
+  let reviewed =
+    Test_support.read_file "fixtures/nu/builtins.txt"
+    |> String.split_on_char '\n'
+  in
+  match
+    run
+      {|help commands | where command_type in [built-in keyword] | get name | str join "\n"|}
+  with
+  | Ok (out, 0) ->
+      let fresh =
+        String.split_on_char '\n' out
+        |> List.filter (fun n -> n <> "" && not (List.mem n reviewed))
+      in
+      if fresh <> [] then
+        Alcotest.failf
+          "nu builtins not yet reviewed against the gate: %s. Check each for \
+           exec, file-loading or network reach (deny in Gate_nu if so), then \
+           add it to test/fixtures/nu/builtins.txt."
+          (String.concat ", " fresh)
+  | Ok (_, n) -> Alcotest.failf "help commands exited %d" n
+  | Error e -> Alcotest.fail (Op.Nu.pp_error e)
+
 let suite =
   ( "nu",
     [
@@ -303,6 +333,7 @@ let suite =
         test_plugin_note_describes_commands );
       ("nu print", `Quick, test_nu_print);
       ("nu output tail", `Quick, test_nu_output_tail);
+      ("nu builtins reviewed", `Quick, test_nu_builtins_reviewed);
       ( "nu env_with replaces not appends",
         `Quick,
         test_env_with_replaces_not_appends );

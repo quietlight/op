@@ -210,13 +210,7 @@ let check_use ~modules rest =
             " or a module found in the profile's module dirs at this call ("
             ^ String.concat ", " l ^ ")")
 
-(* A [shape_internalcall] token: a builtin/command invocation, e.g. "ls", "http
-   get", "overlay use", "use". [rest] is the tokens after it, for `use`'s module
-   lookahead. Matched on the first word so subcommands (`http get`)
-   are covered. [modules]/[plugins] are the profile's vetted module and plugin
-   names. *)
-let check_internalcall ~modules ~plugins ~rest content =
-  let content = unexported content in
+let check_command ~modules ~plugins ~rest content =
   let w = first_word content in
   if List.mem w denied_builtins then
     err_deny
@@ -224,12 +218,6 @@ let check_internalcall ~modules ~plugins ~rest content =
        outside the toolbox. Delegate network work via `op --json \"prompt\"` \
        and parse with `from json`."
       w
-  else if w = "history" then
-    (* No path in sight, so Layer 2's history-file pattern never fires, but
-       this reads the same file: shell history is where pasted secrets end up. *)
-    err_deny
-      "`history` is denied: shell history often holds pasted secrets. Ask the \
-       user for the command instead."
   else if w = "extern" then
     (* `extern` declares a signature for an external, and the call site then
        flattens to a bare shape_internalcall with *no* shape_external token
@@ -263,6 +251,61 @@ let check_internalcall ~modules ~plugins ~rest content =
        the plugin registry or execute arbitrary binaries."
   else if w = "use" then check_use ~modules rest
   else Ok ()
+
+(* Builtins that reach past the gate under a name that says neither network
+   nor exec, each with the reason quoted back. Nushell adds such commands
+   between releases ([run], [run-internal] and [%] dispatch arrived after
+   0.114), which is why test_nu pins the reviewed builtin catalogue: a new
+   one fails the tests until someone decides whether it belongs here. Matched
+   on the whole command ([config nu]) or, for a bare name, its first word. *)
+let denied_commands =
+  [
+    ( "run",
+      "it runs a script file the gate never inspected. Inline the code into \
+       this script instead." );
+    ( "run-internal",
+      "it calls a builtin by a runtime name the gate cannot check. Call the \
+       builtin by its literal name." );
+    (* No path in sight, so Layer 2's history-file pattern never fires, but
+       this reads the same file. *)
+    ( "history",
+      "shell history often holds pasted secrets. Ask the user for the command \
+       instead." );
+    ("config nu", "it runs $env.EDITOR, a program outside the toolbox.");
+    ("config env", "it runs $env.EDITOR, a program outside the toolbox.");
+    ("config reset", "it rewrites the user's own Nushell config files.");
+    ("version check", "it reaches the network.");
+    ( "generate completions",
+      "it runs the named program (with --help) outside the gate's view." );
+  ]
+
+(* [%$cmd …] / [%(expr) …] is dynamic dispatch: the builtin is named at
+   runtime, so the whole call flattens to one token starting with [%]. (A
+   static [%print] flattens to plain [print].) *)
+let denied_command content =
+  if starts_with ~prefix:"%" content then
+    Some
+      ( "dynamic dispatch (`%$cmd`)",
+        "it calls a builtin by a runtime name the gate cannot check. Call the \
+         builtin by its literal name." )
+  else
+    let named n =
+      Option.map (fun r -> (n, r)) (List.assoc_opt n denied_commands)
+    in
+    match named content with
+    | Some d -> Some d
+    | None -> named (first_word content)
+
+(* A [shape_internalcall] token: a builtin/command invocation, e.g. "ls", "http
+   get", "overlay use", "use". [rest] is the tokens after it, for `use`'s module
+   lookahead. Matched on the first word so subcommands (`http get`)
+   are covered. [modules]/[plugins] are the profile's vetted module and plugin
+   names. *)
+let check_internalcall ~modules ~plugins ~rest content =
+  let content = unexported content in
+  match denied_command content with
+  | Some (name, reason) -> err_deny "`%s` is denied: %s" name reason
+  | None -> check_command ~modules ~plugins ~rest content
 
 (* Walk the flat token stream, checking each token that carries a command
    identity and short-circuiting on the first offender. Only three shapes
@@ -348,14 +391,17 @@ let rec walk ?prev ~externals ~modules ~plugins = function
      scripts have no need to set it. *)
 let protected_env = [ "OP_DEPTH"; "OP_HOST_PATH"; "PATH"; "Path" ]
 
-(* A record/list key strips to its bare name: nu reports a quoted key's
-   [content] with the quotes ([{"OP_DEPTH": …}] -> ["OP_DEPTH"]). *)
+(* A name token strips to its bare name: nu reports a quoted name's [content]
+   with its quotes, so ["OP_DEPTH"], ['OP_DEPTH'], [`OP_DEPTH`] and a raw
+   string [r#'OP_DEPTH'#] all name the same variable. *)
 let strip_quotes s =
   let n = String.length s in
-  if
-    n >= 2
-    && ((s.[0] = '"' && s.[n - 1] = '"') || (s.[0] = '\'' && s.[n - 1] = '\''))
-  then String.sub s 1 (n - 2)
+  let quoted q = n >= 2 && s.[0] = q && s.[n - 1] = q in
+  if quoted '"' || quoted '\'' || quoted '`' then String.sub s 1 (n - 2)
+  else if n >= 3 && s.[0] = 'r' && (s.[1] = '#' || s.[1] = '\'') then
+    match (String.index_opt s '\'', String.rindex_opt s '\'') with
+    | Some i, Some j when j > i -> String.sub s (i + 1) (j - i - 1)
+    | _ -> s
   else s
 
 let assign_ops = [ "="; "+="; "-="; "*="; "/="; "++=" ]
@@ -394,7 +440,7 @@ let check_env_writes tokens =
     | t :: rest ->
         let* () =
           match (token_shape t, token_content t) with
-          | Some "shape_string", Some c
+          | Some ("shape_string" | "shape_raw_string"), Some c
             when List.mem (strip_quotes c) protected_env
                  && not (env_read ~prev rest) ->
               let name = strip_quotes c in

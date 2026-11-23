@@ -1,0 +1,18 @@
+[
+  {
+    "content": "print",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 1,
+      "end": 6
+    }
+  },
+  {
+    "content": "hi",
+    "shape": "shape_string",
+    "span": {
+      "start": 7,
+      "end": 9
+    }
+  }
+]

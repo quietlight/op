@@ -80,7 +80,11 @@ let test_sensitive_paths_match () =
   hits "huggingface token" "open ~/.cache/huggingface/token";
   hits "rclone config" "open ~/.config/rclone/rclone.conf";
   hits "proc environ" "open /proc/self/environ";
-  hits "quoted proc" "open '/proc/1/environ'"
+  hits "quoted proc" "open '/proc/1/environ'";
+  hits "backtick proc" "open `/proc/1/environ`";
+  hits "proc in a list" "[/proc/1/environ] | each { open $in }";
+  hits "proc in a record" "{p:/proc/1/environ}";
+  hits "op sessions" "ls ~/.op_global/sessions"
 
 let test_sensitive_path_near_misses () =
   let misses name s =
@@ -95,7 +99,7 @@ let test_sensitive_path_near_misses () =
   misses "history.md is not a history file" "open docs/history.md";
   misses "undotted npmrc mention" "grep npmrc README.md";
   misses "proc inside a data path" "open /mnt/data/proc/x.csv";
-  misses "op sessions are not agent config" "ls ~/.op_global/sessions"
+  misses "proc after a computed dir" "open $\"($root)/proc/x.csv\""
 
 (* --- window: one-shot flagged-call reminder --- *)
 

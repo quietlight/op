@@ -1,0 +1,42 @@
+[
+  {
+    "content": "let",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 0,
+      "end": 3
+    }
+  },
+  {
+    "content": "c",
+    "shape": "shape_vardecl",
+    "span": {
+      "start": 4,
+      "end": 5
+    }
+  },
+  {
+    "content": "\"x\"",
+    "shape": "shape_string",
+    "span": {
+      "start": 8,
+      "end": 11
+    }
+  },
+  {
+    "content": "%$c a",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 13,
+      "end": 18
+    }
+  },
+  {
+    "content": "a",
+    "shape": "shape_string",
+    "span": {
+      "start": 17,
+      "end": 18
+    }
+  }
+]

@@ -111,6 +111,30 @@ let test_module_inline_ok () = ok "module_inline"
 (* [history] reads shell history with no path for Layer 2 to see. *)
 let test_history_denied () = denied ~naming:"history" "history"
 
+(* Builtins that run code or reach out under names that are neither network
+   nor exec: [run] loads an unread file, [run-internal] and [%$cmd] call a
+   builtin named at runtime ([%$c] with c = run-external really runs a
+   program), [config nu]/[config env] run $env.EDITOR, which a script can
+   set. Their harmless siblings stay allowed. *)
+let test_dispatch_builtins_denied () =
+  List.iter
+    (fun (naming, fixture) -> denied ~naming fixture)
+    [
+      ("run", "run_file");
+      ("run-internal", "run_internal");
+      ("dynamic dispatch", "dynamic_dispatch");
+      ("dynamic dispatch", "dynamic_dispatch_paren");
+      ("config nu", "config_nu");
+      ("config reset", "config_reset");
+      ("version check", "version_check");
+      ("generate completions", "generate_completions");
+    ]
+
+let test_dispatch_siblings_ok () =
+  ok "config_flatten";
+  ok "version_bare";
+  ok "static_percent"
+
 (* [--plugin-config] on either side of an allowed plugin name would load a
    registry op did not write. *)
 let test_plugin_use_config_denied () =
@@ -159,6 +183,9 @@ let test_env_writes_denied () =
       ("PATH", "env_path_append");
       ("PATH", "env_path_member_assign");
       ("PATH", "env_path_record");
+      ("PATH", "env_path_backtick");
+      ("PATH", "env_path_raw_key");
+      ("OP_DEPTH", "env_hide_depth_backtick");
     ]
 
 let test_env_path_reads_ok () =
@@ -485,6 +512,8 @@ let suite =
       ("export module file denied", `Quick, test_export_module_file_denied);
       ("module inline ok", `Quick, test_module_inline_ok);
       ("history denied", `Quick, test_history_denied);
+      ("dispatch builtins denied", `Quick, test_dispatch_builtins_denied);
+      ("dispatch siblings ok", `Quick, test_dispatch_siblings_ok);
       ("plugin use config denied", `Quick, test_plugin_use_config_denied);
       ("computed external denied", `Quick, test_computed_external_denied);
       ("unknown subcommand hint", `Quick, test_unknown_subcommand_hint);

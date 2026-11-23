@@ -204,12 +204,13 @@ and rejects anything the profile does not allow:
 - external commands outside the profile's `externals`
 - computed command heads such as `^$cmd`, and path-based dispatch
 - the network, exec and dispatch builtins (`http`, `run-external`, `exec`,
-  `source`, `plugin` and friends), and anything that loads a file the gate has
-  not read (`use`/`export use`/`module` of a path)
+  `run-internal`, `%$cmd`, `plugin` and friends), and anything that loads a
+  file the gate has not read (`source`, `run`, `use`/`export use`/`module` of a
+  path)
 - setting `PATH` or op's `OP_*` variables (they may only be read)
 
 Scripts that name sensitive paths (ssh keys, cloud credentials, `.env`, shell
-history, `/proc`) or write dot-files are denied too. That check is a text match
+history, `/proc`, op's own `~/.op_global`) or write dot-files are denied too. That check is a text match
 on the script, so it stops an incidental read, not a determined one. The file
 tools refuse the same paths, and any path with a dot-prefixed segment.
 
@@ -262,6 +263,10 @@ Choose tools and profiles knowing these grants:
   check-then-use races get past them. They stop accidents.
 - **Text you read can steer the model.** A file on any drive may carry
   instructions. For untrusted inputs, run op inside an OS sandbox.
+- **Memory and processes are not limited.** op bounds what it keeps of a
+  script's output, not what nu or its children allocate, and a timeout stops
+  nu but not programs nu started. When the machine is busy, cap the whole tree:
+  `systemd-run --user --scope -p MemoryMax=3G op …`.
 
 ## Skills
 

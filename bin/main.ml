@@ -374,7 +374,7 @@ let run_with_context ~env ~mode ~cwd ~config ~provider ~api_key ~model ~tls
    default stdout is not JSON — in handoff mode the prompt *is* the payload,
    just as --list's default is a table. *)
 let report_handoff ~json ~goal ~session_id ~model ~files document =
-  if not json then print_string document
+  if not json then print_string (Op.Render.scrub_string document)
   else
     let paths ps = `List (List.map (fun p -> `String p) ps) in
     print_endline
@@ -476,10 +476,16 @@ let run_prompt ~env ~mode ~session_id ~parent_id ~from_session ~model_spec
      PATH so this op's own tools and toolbox resolve, and refuse to run past a
      bounded recursion depth so op->nu->op cannot run away. *)
   Option.iter (Unix.putenv "PATH") (Sys.getenv_opt "OP_HOST_PATH");
+  (* Absent means a top-level run; present but not a small non-negative
+     integer means something rewrote the marker, so refuse rather than read
+     it as depth 0. *)
   let depth =
     match Sys.getenv_opt "OP_DEPTH" with
-    | Some d -> Option.value (int_of_string_opt d) ~default:0
     | None -> 0
+    | Some d -> (
+        match int_of_string_opt d with
+        | Some n when n >= 0 -> n
+        | _ -> Fmt.kstr fail "op: invalid OP_DEPTH=%S; refusing to run" d)
   in
   if depth > 2 then
     Fmt.kstr fail "op recursion too deep (OP_DEPTH=%d > 2); refusing to run"

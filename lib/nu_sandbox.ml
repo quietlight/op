@@ -94,24 +94,14 @@ let scan_module_sources ~warn dirs () =
             (* Cap the read: module dirs are writable by the nu tool alone, so a
                runaway run can drop a huge .nu file that would otherwise be read
                in full on every gate call (memory), and fed to `nu ast`. Skip an
-               oversized file before reading it; it becomes un-importable (a
-               clean "module not found" deny) rather than an amplifier. *)
-            let oversized =
-              match Unix.stat path with
-              | { st_size; _ } -> st_size > Gate_nu.max_script_chars
-              | exception Unix.Unix_error _ -> false
-            in
-            if oversized then (
-              Fmt.kstr warn
-                "nu modules: %s skipped (larger than the %d-byte module cap)"
-                path Gate_nu.max_script_chars;
-              None)
-            else
-              match Util.read_file path with
-              | Ok source -> Some (name, source)
-              | Error msg ->
-                  Fmt.kstr warn "nu modules: cannot read %s: %s" path msg;
-                  None)
+               oversized file, or a FIFO or device named *.nu, before reading
+               it; it becomes un-importable (a clean "module not found" deny)
+               rather than an amplifier or a hang. *)
+            match Util.read_file_capped ~max:Gate_nu.max_script_chars path with
+            | Ok source -> Some (name, source)
+            | Error msg ->
+                Fmt.kstr warn "nu modules: %s skipped: %s" path msg;
+                None)
   in
   List.concat_map read_dir dirs
   |> List.fold_left

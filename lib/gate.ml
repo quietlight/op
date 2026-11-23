@@ -82,8 +82,12 @@ let normalize_segments abs =
    {!path_verdict} denies a file-tool path matching one and {!Gate_nu}'s
    layer-2 text check denies a script naming one. [/proc] is here because
    [/proc/self/environ] (or the parent's, from nu) is op's whole inherited
-   environment, API keys included; the leading anchor keeps a data path like
-   [/mnt/x/proc/] out. The history entry is deliberately broad
+   environment, API keys included; it must not follow a path character, which
+   keeps a data path like [/mnt/x/proc/] out while catching it after a quote,
+   bracket, brace or colon. All of [~/.op_global] is here, not only the agent
+   config: the sessions hold every past run's prompts, file contents and tool
+   output, and a nu read would send them to the current provider. A nested
+   [op --list]/[--handoff] (the [op] external) is the deliberate way in. The history entry is deliberately broad
    ([.bash_history], [.zsh_history], [.psql_history], bare [.history]): pasted
    secrets end up in all of them. [.config/gh] is gh's token store; the trailing \b keeps
    [.config/ghostty] and friends out. [.config/himalaya] is the mail config:
@@ -92,7 +96,7 @@ let normalize_segments abs =
    runs it through [/bin/sh] itself. *)
 let sensitive_path_re =
   Re.Perl.compile_pat ~opts:[ `Caseless ]
-    {|(\.ssh\b|id_(rsa|dsa|ecdsa|ed25519)|\.aws/credentials|\.netrc\b|\.gnupg\b|\.env\b|\.op_global/agent\b|\.pem\b|\.p12\b|\.pfx\b|\.kube/config|\.docker/config|\.npmrc\b|\.pypirc\b|\.cargo/credentials|\.git-credentials\b|\.config/gh\b|\.pgpass\b|\.config/gcloud\b|\.config/himalaya\b|\.config/typesafe\b|\.config/rclone\b|\.cache/huggingface\b|\.kaggle\b|\.azure\b|\.vault-token\b|\.local/share/keyrings\b|terraform\.tfstate|\.[a-z_]*history\b|(^|[\s'"(])/proc\b)|}
+    {|(\.ssh\b|id_(rsa|dsa|ecdsa|ed25519)|\.aws/credentials|\.netrc\b|\.gnupg\b|\.env\b|\.op_global\b|\.pem\b|\.p12\b|\.pfx\b|\.kube/config|\.docker/config|\.npmrc\b|\.pypirc\b|\.cargo/credentials|\.git-credentials\b|\.config/gh\b|\.pgpass\b|\.config/gcloud\b|\.config/himalaya\b|\.config/typesafe\b|\.config/rclone\b|\.cache/huggingface\b|\.kaggle\b|\.azure\b|\.vault-token\b|\.local/share/keyrings\b|terraform\.tfstate|\.[a-z_]*history\b|(^|[^\w.~/$)-])/proc\b)|}
 
 let path_verdict ~cwd raw =
   let abs = if Filename.is_relative raw then Filename.concat cwd raw else raw in
