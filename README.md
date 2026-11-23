@@ -243,11 +243,11 @@ A skill is a markdown file under `$cwd/skills/`, with an optional
 context file:
 
 ```
-op --context skills/review.md "the staged diff"
+op --context skills/practical-nu.md "summarise the parquet files in data/"
 ```
 
-This repo ships a few, including
-[skills/practical-nu.md](skills/practical-nu.md), a playbook for getting
+This repo ships one,
+[skills/practical-nu.md](skills/practical-nu.md): a playbook for getting
 things done inside the gated Nushell environment. It is worth injecting on
 any run that uses the `nu` tool.
 
