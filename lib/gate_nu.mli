@@ -24,12 +24,13 @@
       {e declared}-variable head as inert [shape_variable] (only the undeclared
       case surfaces as [shape_garbage]); and every [shape_internalcall] whose
       first word is a network/exec/dispatch builtin ([http], [run-external],
-      [exec], [start], [source], [source-env], [overlay use], [plugin] except
-      [plugin use] of a profile plugin, or [use] of anything but the standard
-      library or a vetted profile module) is denied outright. [job] is allowed:
-      job closures are flattened and walked like any other code, and nu kills
-      background jobs at script exit, so they add no capability and cannot
-      outlive the tool call.
+      [exec], [start], [source], [source-env], [overlay use], [extern], [module]
+      loading a file, [plugin] except a bare [plugin use] of a profile plugin,
+      or [use] of anything but the standard library or a vetted profile module)
+      is denied outright. An [export] prefix is judged as the command after it.
+      [job] is allowed: job closures are flattened and walked like any other
+      code, and nu kills background jobs at script exit, so they add no
+      capability and cannot outlive the tool call.
     - {b Module vetting}: module dirs are scanned on every call, and a [use] of
       a profile module is allowed only after its freshly-read source passes the
       same Layer-1 checks (recursively, for modules importing modules). The

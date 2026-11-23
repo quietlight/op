@@ -93,6 +93,27 @@ let test_interp_http_denied () = denied ~naming:"http" "interp_http"
 let test_extern_denied () = denied ~naming:"extern" "extern_call"
 let test_export_extern_denied () = denied ~naming:"extern" "export_extern"
 
+(* The other [export] spellings flatten the same way, so each must be judged
+   as the command after the prefix: [export use ./m.nu] ran an unread file,
+   while [export use std] stays fine. *)
+let test_export_use_file_denied () = denied ~naming:"use" "export_use_file"
+let test_export_use_std_ok () = ok "export_use_std"
+
+(* [module ./m.nu] loads an unread file (and could shadow a vetted module's
+   name); an inline [module m { ... }] is ordinary walked code. *)
+let test_module_file_denied () = denied ~naming:"module" "module_file"
+
+let test_export_module_file_denied () =
+  denied ~naming:"module" "export_module_file"
+
+let test_module_inline_ok () = ok "module_inline"
+
+(* [--plugin-config] on either side of an allowed plugin name would load a
+   registry op did not write. *)
+let test_plugin_use_config_denied () =
+  denied ~plugins:[ "polars" ] ~naming:"plugin use" "plugin_use_config";
+  denied ~plugins:[ "polars" ] ~naming:"plugin use" "plugin_use_config_first"
+
 (* A computed external head (`^$cmd`) flattens to garbage and is denied. *)
 let test_computed_external_denied () =
   denied ~naming:"computed" "computed_external"
@@ -251,6 +272,15 @@ let test_verdict_computed_head_denies () =
     "names computed" true
     (Test_support.contains (reason v) "computed")
 
+(* A computed head straight after a closure's brace has no whitespace before
+   its caret ([do {^$c}]) and ran any program by absolute path. *)
+let test_verdict_computed_head_in_closure_denies () =
+  List.iter
+    (fun script ->
+      let v = verdict ~ast:(ast_of "clean") ~script () in
+      Alcotest.(check string) script "deny" (tag v))
+    [ "let c = \"/bin/x\"; do {^$c}"; "let c = \"x\"; [(^$c)]"; "[^$c]" ]
+
 (* A regex anchor's `^(` sits after a quote, not at a command position — it
    must not trip the computed-head check. *)
 let test_verdict_regex_anchor_allowed () =
@@ -275,6 +305,12 @@ let test_verdict_module_vet_pass () =
   let ast = ast_routing ~top:"use_module" ~gpx:"clean" in
   let v = verdict ~modules:module_sources ~ast ~script:"use gpx.nu" () in
   Alcotest.(check string) "clean module -> allow" "allow" (tag v)
+
+(* [export use] of a profile module must be vetted exactly like [use]. *)
+let test_verdict_export_use_module_vetted () =
+  let ast = ast_routing ~top:"export_use_module_bad" ~gpx:"clean" in
+  let v = verdict ~modules:module_sources ~ast ~script:"export use bad.nu" () in
+  Alcotest.(check string) "http in exported module -> deny" "deny" (tag v)
 
 let test_verdict_module_vet_fail () =
   let ast = ast_routing ~top:"use_module_bad" ~gpx:"clean" in
@@ -422,6 +458,12 @@ let suite =
       ("interp http denied", `Quick, test_interp_http_denied);
       ("extern denied", `Quick, test_extern_denied);
       ("export extern denied", `Quick, test_export_extern_denied);
+      ("export use file denied", `Quick, test_export_use_file_denied);
+      ("export use std ok", `Quick, test_export_use_std_ok);
+      ("module file denied", `Quick, test_module_file_denied);
+      ("export module file denied", `Quick, test_export_module_file_denied);
+      ("module inline ok", `Quick, test_module_inline_ok);
+      ("plugin use config denied", `Quick, test_plugin_use_config_denied);
       ("computed external denied", `Quick, test_computed_external_denied);
       ("unknown subcommand hint", `Quick, test_unknown_subcommand_hint);
       ( "handshake write record denied",
@@ -459,6 +501,12 @@ let suite =
       ("verdict save dotfile denies", `Quick, test_verdict_save_dotfile_denies);
       ("verdict computed head denies", `Quick, test_verdict_computed_head_denies);
       ("verdict regex anchor allowed", `Quick, test_verdict_regex_anchor_allowed);
+      ( "verdict computed head in closure denies",
+        `Quick,
+        test_verdict_computed_head_in_closure_denies );
+      ( "verdict export use module vetted",
+        `Quick,
+        test_verdict_export_use_module_vetted );
       ("verdict module vet pass", `Quick, test_verdict_module_vet_pass);
       ("verdict module vet fail", `Quick, test_verdict_module_vet_fail);
       ("verdict module vet recursive", `Quick, test_verdict_module_vet_recursive);

@@ -1,0 +1,18 @@
+[
+  {
+    "content": "module",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 0,
+      "end": 6
+    }
+  },
+  {
+    "content": "./m.nu",
+    "shape": "shape_string",
+    "span": {
+      "start": 7,
+      "end": 13
+    }
+  }
+]

@@ -34,6 +34,16 @@ let starts_with ~prefix s =
   String.length s >= String.length prefix
   && String.sub s 0 (String.length prefix) = prefix
 
+(* [export use], [export extern], [export module] each flatten to a single
+   token whose first word is "export". The prefix changes what a module
+   exposes, not what runs, so every check judges the command after it — or
+   [export use ./x.nu] would load a file the gate never read. *)
+let unexported s =
+  let p = "export " in
+  if starts_with ~prefix:p s then
+    String.sub s (String.length p) (String.length s - String.length p)
+  else s
+
 (* Null-safe object lookup: [member] raises on a non-object
    (including [`Null]), and the AST is full of nulls (empty [pipe], absent
    [redirection]), so a raising accessor would crash the generic walk. *)
@@ -148,12 +158,65 @@ let rec use_module = function
       | _ -> token_content t)
   | [] -> None
 
+let is_flag t = token_shape t = Some "shape_flag"
+
+(* [plugin use NAME], bare: nu accepts a flag on either side of the name, and
+   [--plugin-config] would point it at a registry op did not write. *)
+let bare_plugin_use ~plugins = function
+  | name :: next ->
+      (not (is_flag name))
+      && Option.fold ~none:false
+           ~some:(fun p -> List.mem p plugins)
+           (token_content name)
+      && not (match next with t :: _ -> is_flag t | [] -> false)
+  | [] -> false
+
+(* [module NAME { ... }] is inline code the walk sees, since flatten emits the
+   block body as ordinary tokens; [module ./file.nu] loads a file it never
+   read. *)
+let inline_module = function
+  | _ :: body :: _ -> token_shape body = Some "shape_block"
+  | _ -> false
+
+(* Loading a profile plugin is fine (op supplies the registry); loading
+   anything else — or naming a registry by hand — is not. *)
+let check_plugin_use ~plugins rest =
+  if bare_plugin_use ~plugins rest then Ok ()
+  else
+    err_deny
+      "`plugin use` may only load %s; op supplies the plugin registry, so call \
+       it as a bare `plugin use <name>`."
+      (match plugins with
+      | [] -> "nothing in this profile (no plugins configured)"
+      | l -> String.concat ", " l)
+
+let check_use ~modules rest =
+  match use_module rest with
+  (* The built-in standard library — [std] itself or a [std/...] submodule.
+     A bare [std]-prefixed *file* ([use stdfoo.nu]) would still source unseen
+     code, so match [std] exactly or under a '/'. *)
+  | Some m when m = "std" || starts_with ~prefix:"std/" m -> Ok ()
+  (* A vetted profile module, by exact bare name (scanned names carry no
+     path separator, so path forms can never match). *)
+  | Some m when List.mem m modules -> Ok ()
+  | _ ->
+      err_deny
+        "`use` may only import the standard library (`use std`)%s; module dirs \
+         are rescanned at each call, so create a `.nu` file there and import \
+         its bare name on the next call."
+        (match modules with
+        | [] -> " or a module found in the profile's module dirs at this call"
+        | l ->
+            " or a module found in the profile's module dirs at this call ("
+            ^ String.concat ", " l ^ ")")
+
 (* A [shape_internalcall] token: a builtin/command invocation, e.g. "ls", "http
    get", "overlay use", "use". [rest] is the tokens after it, for `use`'s module
    lookahead. Matched on the first word so subcommands (`http get`)
    are covered. [modules]/[plugins] are the profile's vetted module and plugin
    names. *)
 let check_internalcall ~modules ~plugins ~rest content =
+  let content = unexported content in
   let w = first_word content in
   if List.mem w denied_builtins then
     err_deny
@@ -161,19 +224,22 @@ let check_internalcall ~modules ~plugins ~rest content =
        outside the toolbox. Delegate network work via `op --json \"prompt\"` \
        and parse with `from json`."
       w
-  else if w = "extern" || starts_with ~prefix:"export extern" content then
+  else if w = "extern" then
     (* `extern` declares a signature for an external, and the call site then
        flattens to a bare shape_internalcall with *no* shape_external token
        anywhere — so the toolbox allowlist in [check_external] never sees the
        name, while nu still runs the program. It is the one construct that
        executes outside the toolbox with nothing for the walk to catch, so deny
-       the declaration itself. (Matched on the whole content as well as the
-       first word: [first_word "export extern"] is "export".) *)
+       the declaration itself. *)
     err_deny
-      "`%s` is denied: it declares an external command the gate cannot see at \
-       the call site, which would run a program outside the toolbox. Call the \
-       external directly by its literal name instead."
-      (if w = "extern" then "extern" else "export extern")
+      "`extern` is denied: it declares an external command the gate cannot see \
+       at the call site, which would run a program outside the toolbox. Call \
+       the external directly by its literal name instead."
+  else if w = "module" && not (inline_module rest) then
+    err_deny
+      "`module <file>` is denied: it would run code from a file the gate never \
+       inspected. Write the module inline (`module name { ... }`) or put it in \
+       a profile module dir."
   else if starts_with ~prefix:"overlay use" content then
     err_deny
       "`overlay use` is denied: it would run code from a file the gate never \
@@ -184,40 +250,12 @@ let check_internalcall ~modules ~plugins ~rest content =
        Inline the code into this script instead."
       w
   else if starts_with ~prefix:"plugin use" content then
-    (* Loading a profile plugin is fine (op supplies the registry); loading
-       anything else — or naming a registry by hand — is not. *)
-    match use_module rest with
-    | Some p when List.mem p plugins -> Ok ()
-    | _ ->
-        err_deny
-          "`plugin use` may only load %s; op supplies the plugin registry, so \
-           call it as a bare `plugin use <name>`."
-          (match plugins with
-          | [] -> "nothing in this profile (no plugins configured)"
-          | l -> String.concat ", " l)
+    check_plugin_use ~plugins rest
   else if w = "plugin" then
     err_deny
       "`plugin` subcommands other than `plugin use` are denied: they mutate \
        the plugin registry or execute arbitrary binaries."
-  else if w = "use" then
-    match use_module rest with
-    (* The built-in standard library — [std] itself or a [std/...] submodule.
-       A bare [std]-prefixed *file* ([use stdfoo.nu]) would still source unseen
-       code, so match [std] exactly or under a '/'. *)
-    | Some m when m = "std" || starts_with ~prefix:"std/" m -> Ok ()
-    (* A vetted profile module, by exact bare name (scanned names carry no
-       path separator, so path forms can never match). *)
-    | Some m when List.mem m modules -> Ok ()
-    | _ ->
-        err_deny
-          "`use` may only import the standard library (`use std`)%s; module \
-           dirs are rescanned at each call, so create a `.nu` file there and \
-           import its bare name on the next call."
-          (match modules with
-          | [] -> " or a module found in the profile's module dirs at this call"
-          | l ->
-              " or a module found in the profile's module dirs at this call ("
-              ^ String.concat ", " l ^ ")")
+  else if w = "use" then check_use ~modules rest
   else Ok ()
 
 (* Walk the flat token stream, checking each token that carries a command
@@ -364,7 +402,8 @@ let used_modules ~modules ast =
     | t :: rest -> (
         let tail = collect rest in
         match (token_shape t, token_content t) with
-        | Some "shape_internalcall", Some c when first_word c = "use" -> (
+        | Some "shape_internalcall", Some c
+          when first_word (unexported c) = "use" -> (
             match use_module rest with
             | Some m when List.mem m modules -> m :: tail
             | _ -> tail)
@@ -378,9 +417,10 @@ let used_modules ~modules ast =
    (Only the *undeclared* case flattens to [shape_garbage].) A computed head
    evades the name check entirely and, when it holds a path, the toolbox PATH
    too. The caret must sit at a command position (start, or after
-   whitespace/pipe/semicolon/paren): a regex anchor like [parse --regex
+   whitespace/pipe/semicolon/paren, or straight after a brace or bracket opening
+   a closure or list: [do {^$c}]): a regex anchor like [parse --regex
    '^(\d+)'] has a quote before its caret and must not trip this. *)
-let computed_head_re = Re.Perl.compile_pat {|(^|[\s|;(])\^[$(]|}
+let computed_head_re = Re.Perl.compile_pat {|(^|[\s|;({\[])\^[$(]|}
 
 let check_computed_head text =
   if Re.execp computed_head_re text then

@@ -1,0 +1,82 @@
+[
+  {
+    "content": "module",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 0,
+      "end": 6
+    }
+  },
+  {
+    "content": "m",
+    "shape": "shape_string",
+    "span": {
+      "start": 7,
+      "end": 8
+    }
+  },
+  {
+    "content": "{ ",
+    "shape": "shape_block",
+    "span": {
+      "start": 9,
+      "end": 11
+    }
+  },
+  {
+    "content": "export def",
+    "shape": "shape_internalcall",
+    "span": {
+      "start": 11,
+      "end": 21
+    }
+  },
+  {
+    "content": "x",
+    "shape": "shape_string",
+    "span": {
+      "start": 22,
+      "end": 23
+    }
+  },
+  {
+    "content": "[]",
+    "shape": "shape_signature",
+    "span": {
+      "start": 24,
+      "end": 26
+    }
+  },
+  {
+    "content": "{ ",
+    "shape": "shape_closure",
+    "span": {
+      "start": 27,
+      "end": 29
+    }
+  },
+  {
+    "content": "1",
+    "shape": "shape_int",
+    "span": {
+      "start": 29,
+      "end": 30
+    }
+  },
+  {
+    "content": " }",
+    "shape": "shape_closure",
+    "span": {
+      "start": 30,
+      "end": 32
+    }
+  },
+  {
+    "content": " }",
+    "shape": "shape_block",
+    "span": {
+      "start": 32,
+      "end": 34
+    }
+  }
+]
