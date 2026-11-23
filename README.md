@@ -204,7 +204,9 @@ and rejects anything the profile does not allow:
 - external commands outside the profile's `externals`
 - computed command heads such as `^$cmd`, and path-based dispatch
 - the network, exec and dispatch builtins (`http`, `run-external`, `exec`,
-  `source`, `plugin` and friends)
+  `source`, `plugin` and friends), and anything that loads a file the gate has
+  not read (`use`/`export use`/`module` of a path)
+- setting `PATH` or op's `OP_*` variables (they may only be read)
 
 Scripts that name sensitive paths (ssh keys, cloud credentials, `.env`, shell
 history, `/proc`) or write dot-files are denied too. That check is a text match
@@ -236,10 +238,30 @@ A profile in `nuProfiles` is the full capability knob for a run:
 | `envAllow`   | Extra environment variable names passed through to the script.       |
 
 With no profile at all, a run has no tools; `--tools nu` then gives the script
-a builtins-only Nushell. That is still useful: Nushell has a builtin for most things you would shell out for.
+a builtins-only Nushell. That is still useful: Nushell has a builtin for most
+things you would shell out for.
 
 Network access from a script is done by calling op itself. Add `op` to
 `externals` and a script can run `op --json "…" | from json` as a subagent.
+
+### What op does not protect
+
+op limits what the agent is handed; it does not contain what it is handed.
+Choose tools and profiles knowing these grants:
+
+- **Builtins-only nu is not read-only.** `rm`, `mv`, `cp` and `save -f` work
+  on any path you can write, on every mounted drive. For a read-only run use
+  `--tools read`.
+- **Reading is sending.** Whatever a tool reads goes to your model provider
+  on the next turn and into the session file. Pick the provider for the data.
+- **An external is a trust grant, not a name.** `make` runs any Makefile,
+  `opam exec` runs anything, `git -c alias.x='!…'` runs anything, and `git`
+  reaches the network. `op` in `externals` can start a nested run under any
+  profile and read every saved session.
+- **Path checks are textual.** Symlinks, paths assembled at runtime and
+  check-then-use races get past them. They stop accidents.
+- **Text you read can steer the model.** A file on any drive may carry
+  instructions. For untrusted inputs, run op inside an OS sandbox.
 
 ## Skills
 
