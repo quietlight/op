@@ -1,7 +1,3 @@
-(* Tests for the transport module *)
-
-(* Drive the retry loop with a scripted sequence of outcomes, recording how
-   long it would have slept between attempts. *)
 let scripted_retries ?(max_attempts = 3) outcomes =
   let remaining = ref outcomes in
   let calls = ref 0 in
@@ -71,9 +67,6 @@ let test_retry_transport_not_retried () =
     "transport errors are not retryable" false
     (Op.Transport.For_testing.retryable (Op.Transport.Transport_error "reset"))
 
-(* A provider body is read into memory whole, so the read is capped rather than
-   trusting the peer to stop. Error bodies get a much smaller cap than
-   successful ones. *)
 let read_body ~limit s =
   Op.Transport.For_testing.read_body ~limit (Eio.Flow.string_source s)
 

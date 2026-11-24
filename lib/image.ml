@@ -1,14 +1,4 @@
-(* Loading and validating image attachments for [--image]. Detects the media
-   type from magic bytes (not the extension), enforces a per-image size cap, and
-   base64-encodes the payload into a neutral [Llm.Image] block. No decoding or
-   resizing: op only reads bytes, sniffs the type, and hands the base64 to the
-   adapters. See image.mli. *)
-
-(* 5 MB raw: a generous safety net at the ~100-250 KB payloads this targets,
-   well inside every provider limit. *)
 let max_bytes = 5 * 1024 * 1024
-
-(* --- base64 (standard alphabet, padded) --------------------------------- *)
 
 let b64_alphabet =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -42,14 +32,11 @@ let base64_encode s =
   | _ -> ());
   Buffer.contents buf
 
-(* --- magic-byte sniffing ------------------------------------------------- *)
-
 let starts_with s prefix =
   String.length s >= String.length prefix
   && String.sub s 0 (String.length prefix) = prefix
 
-(* Match Anthropic's accepted set: png, jpeg, webp, gif. The media type is
-   decided by content, not the file name. Returns None for anything else. *)
+(* Accepted set matches Anthropic: png, jpeg, webp, gif. *)
 let media_type_of_bytes s =
   if starts_with s "\x89PNG\r\n\x1a\n" then Some "image/png"
   else if starts_with s "\xff\xd8\xff" then Some "image/jpeg"
@@ -60,8 +47,6 @@ let media_type_of_bytes s =
     && String.sub s 8 4 = "WEBP"
   then Some "image/webp"
   else None
-
-(* --- loading ------------------------------------------------------------- *)
 
 let load path =
   if not (Sys.file_exists path) then Fmt.error "image %s: no such file" path
@@ -79,11 +64,7 @@ let load path =
           | Some media_type ->
               Ok (Llm.Image { media_type; data = base64_encode data }))
 
-(* [--image] is repeatable, so the per-image cap alone bounds nothing: five
-   images inside the per-file cap still make a 25 MB request once base64 adds
-   its third, which turns a typo in a glob into a provider 400 and a billing
-   spike. Cap the run as a whole too, measured on the encoded payload — that is
-   what actually goes on the wire. *)
+(* Run-wide caps on encoded wire size since [--image] is repeatable. *)
 let max_images = 5
 let max_total_encoded_bytes = 20 * 1024 * 1024
 

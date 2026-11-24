@@ -1,5 +1,3 @@
-(* Tests for Op.Config *)
-
 module Config_testing = Op.Config.For_testing
 
 let test_parse_settings () =
@@ -22,8 +20,6 @@ let test_parse_settings () =
         "profile externals" [ "skraak"; "op" ] profile.externals
   | Error err -> Alcotest.fail (Op.Config.pp_error err)
 
-(* Omitted defaults parse as None rather than erroring, so a run with --model
-   can still proceed (and create settings.json). *)
 let test_parse_settings_omitted () =
   let json = Yojson.Safe.from_string {|{}|} in
   match Config_testing.parse_settings json with
@@ -33,9 +29,6 @@ let test_parse_settings_omitted () =
       Alcotest.(check int) "nu profiles" 0 (List.length settings.nu_profiles)
   | Error err -> Alcotest.fail (Op.Config.pp_error err)
 
-(* With no --profile and no nuDefaultProfile, the run gets the empty profile:
-   the toolbox allowlist has exactly one source of truth (nuProfiles), so an
-   unconfigured run fails closed to a builtins-only Nushell. *)
 let test_resolve_profile_unconfigured_is_empty () =
   let config = Config_testing.make_config () in
   match Op.Config.resolve_nu_profile config ~name:None with
@@ -52,8 +45,6 @@ let path_mode =
       | Op.Config.Host -> Fmt.string ppf "host")
     ( = )
 
-(* Parses a "dev" profile's pathMode from the given fragment (e.g.
-   {|, "pathMode": "host"|}, or "" to omit the field entirely). *)
 let profile_path_mode path_mode_json =
   let json =
     Fmt.kstr Yojson.Safe.from_string
@@ -73,17 +64,12 @@ let test_parse_path_mode_host () =
 let test_parse_path_mode_absent_is_toolbox () =
   Alcotest.check path_mode "default" Op.Config.Toolbox (profile_path_mode "")
 
-(* Any value other than the literal "host" degrades to Toolbox rather than
-   erroring, matching every other profile field's graceful-degrade rule
-   (config.ml:141-144) — a typo fails closed instead of failing the load. *)
 let test_parse_path_mode_unrecognized_is_toolbox () =
   Alcotest.check path_mode "wrong case" Op.Config.Toolbox
     (profile_path_mode {|, "pathMode": "Host"|});
   Alcotest.check path_mode "unrelated string" Op.Config.Toolbox
     (profile_path_mode {|, "pathMode": "toolbox"|})
 
-(* Parses a "dev" profile's envAllow from the given fragment, same shape as
-   [profile_path_mode]. *)
 let profile_env_allow env_allow_json =
   let json =
     Fmt.kstr Yojson.Safe.from_string
@@ -102,13 +88,9 @@ let test_parse_env_allow () =
     [ "OPAMROOT"; "CARGO_HOME" ]
     (profile_env_allow {|, "envAllow": ["OPAMROOT", "CARGO_HOME"]|})
 
-(* Absent envAllow means the base allowlist only — the nu child never inherits
-   the host environment wholesale, so the safe default is the empty extension. *)
 let test_parse_env_allow_absent_is_empty () =
   Alcotest.(check (list string)) "default" [] (profile_env_allow "")
 
-(* Parses a "dev" profile's tools from the given fragment, same shape as
-   [profile_path_mode]. *)
 let profile_tools tools_json =
   let json =
     Fmt.kstr Yojson.Safe.from_string
@@ -121,8 +103,6 @@ let profile_tools tools_json =
       | _ -> Alcotest.fail "expected exactly the 'dev' profile")
   | Error err -> Alcotest.fail (Op.Config.pp_error err)
 
-(* Unlike the other list fields, absence and [] mean different things: absent
-   is "every known tool", an explicit [] is a tool-less chat profile. *)
 let test_parse_profile_tools () =
   Alcotest.(check (option (list string)))
     "named subset"
@@ -134,10 +114,6 @@ let test_parse_profile_tools () =
   Alcotest.(check (option (list string)))
     "absent means all" None (profile_tools "")
 
-(* A baseUrl carries the apiKey in an Authorization header on every request, so
-   plaintext http would put the key on the wire. https is required; http is
-   allowed only for a loopback host, where local model servers speak it and
-   there is no network to sniff. *)
 let parse_base_url url =
   let json =
     Fmt.kstr Yojson.Safe.from_string
@@ -163,13 +139,10 @@ let test_base_url_requires_https () =
   base_url_rejected "file:///etc/passwd";
   base_url_rejected "api.example.com"
 
-(* Loopback is the exception: ollama and llama.cpp serve plain http locally. *)
 let test_base_url_allows_loopback_http () =
   base_url_ok "http://localhost:11434/v1";
   base_url_ok "http://127.0.0.1:8080/v1"
 
-(* [apiKeyEnv] keeps the key out of models.json entirely: the file names a
-   variable and op reads it from its own environment at load. *)
 let parse_key_fields fields =
   let json =
     Fmt.kstr Yojson.Safe.from_string
@@ -192,8 +165,6 @@ let test_api_key_env_read_from_environment () =
     "key read from the named variable" (Some "sk-from-env")
     (provider_key (parse_key_fields {|"apiKeyEnv": "OP_TEST_KEY_ENV",|}))
 
-(* An unset variable warns rather than failing the load: one absent key must not
-   take down --list models or a run against a different provider. *)
 let test_api_key_env_unset_is_none () =
   Alcotest.(check (option string))
     "unset variable yields no key" None
@@ -205,7 +176,6 @@ let test_api_key_literal_still_works () =
     "literal apiKey unchanged" (Some "sk-literal")
     (provider_key (parse_key_fields {|"apiKey": "sk-literal",|}))
 
-(* Both fields at once has no sensible precedence, so it is a config error. *)
 let test_api_key_both_fields_rejected () =
   match
     parse_key_fields {|"apiKey": "sk-x", "apiKeyEnv": "OP_TEST_KEY_ENV",|}
@@ -216,8 +186,6 @@ let test_api_key_both_fields_rejected () =
         (Test_support.contains (Op.Config.pp_error e) "apiKeyEnv")
   | Ok _ -> Alcotest.fail "expected apiKey + apiKeyEnv to be rejected"
 
-(* The missing-models-file error names the directory and shows a schema the
-   user can copy. *)
 let test_missing_models_file_message () =
   let msg =
     Op.Config.pp_error (Op.Config.Missing_models_file "/tmp/.op_global/agent")
@@ -249,8 +217,6 @@ let test_update_settings_preserves_unrelated () =
   Alcotest.(check string)
     "model" "gpt-4o"
     (member "defaultModel" result |> to_string);
-  (* a key op does not know (here a retired one) survives a --set default
-     round-trip untouched *)
   Alcotest.(check string)
     "gate model" "anthropic/haiku"
     (member "gateModel" result |> to_string);
@@ -273,7 +239,6 @@ let test_update_settings_none_input () =
   Alcotest.(check string)
     "model" "claude-3"
     (member "defaultModel" result |> to_string);
-  (* exactly two fields *)
   match result with
   | `Assoc fields -> Alcotest.(check int) "field count" 2 (List.length fields)
   | _ -> Alcotest.fail "expected Assoc"
@@ -382,7 +347,6 @@ let test_find_provider_found () =
   | None -> Alcotest.fail "expected to find provider"
 
 let test_providers_lists_all () =
-  (* [providers] enumerates every provider, in name order. *)
   let groq =
     {
       Op.Config.name = "groq";
@@ -403,8 +367,6 @@ let test_providers_lists_all () =
     "all providers, sorted" [ "deepseek"; "groq" ] names
 
 let test_find_provider_not_found () =
-  (* A name not present in models.json resolves to None: there are no built-in
-     providers. *)
   let providers = Op.Config.String_map.singleton "deepseek" deepseek_provider in
   let cfg = config ~providers () in
   match Op.Config.provider cfg "groq" with
@@ -412,7 +374,6 @@ let test_find_provider_not_found () =
   | None -> ()
 
 let test_provider_missing_base_url () =
-  (* baseUrl is required: a provider entry without one fails. *)
   let json =
     Yojson.Safe.from_string
       {|{ "api": "openai-completions", "apiKey": "sk-x" }|}
@@ -423,7 +384,6 @@ let test_provider_missing_base_url () =
   | Ok _ -> Alcotest.fail "expected error for missing baseUrl"
 
 let test_parse_provider_default_api () =
-  (* api is optional and defaults to openai-completions. *)
   let json =
     Yojson.Safe.from_string
       {|{ "baseUrl": "https://api.example.com/v1", "apiKey": "sk-x" }|}
@@ -473,8 +433,6 @@ let test_parse_provider_context_window () =
       Alcotest.(check (option int))
         "omitted contextWindow" None
         (Op.Config.context_window_for provider ~model:"small");
-      (* A --model override may name a model the provider does not list; that
-         must disable the gauge, not crash the run. *)
       Alcotest.(check (option int))
         "unlisted model" None
         (Op.Config.context_window_for provider ~model:"other")
@@ -507,8 +465,6 @@ let test_parse_settings_handoff () =
         "context limit" (Some 0.7) settings.context_limit
   | Error err -> Alcotest.fail (Op.Config.pp_error err)
 
-(* A fraction outside (0, 1] is a typo that would silently disable the cap (or
-   stop every run at once), so it fails the load rather than being ignored. *)
 let test_parse_settings_bad_context_limit () =
   let check spec =
     match Config_testing.parse_settings (Yojson.Safe.from_string spec) with
@@ -558,15 +514,10 @@ let test_resolve_default_spec () =
     Alcotest.check resolve_result spec expected
       (Op.Config.resolve_default_spec cfg spec)
   in
-  (* A known provider with a listed model resolves to the pair. *)
   check "deepseek/deepseek-chat" (Ok ("deepseek", "deepseek-chat"));
-  (* A model the provider does not list is rejected, so the saved default never
-     points at a model that 404s at call time. *)
   check "deepseek/some-future-model"
     (Error (`Unknown_model ("deepseek", "some-future-model")));
-  (* A bare model (no provider) is rejected: a default needs both halves. *)
   check "deepseek-chat" (Error (`Missing_provider "deepseek-chat"));
-  (* An unknown provider is rejected before anything is saved. *)
   check "groq/llama" (Error (`Unknown_provider "groq"))
 
 let suite =

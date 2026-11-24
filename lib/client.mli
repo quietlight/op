@@ -1,9 +1,7 @@
-(** Provider dispatch for the agent loop.
+(** Provider dispatch from {!Config.api} to concrete adapters.
 
-    Maps the configured provider's wire format (Config.api) to a concrete
-    adapter and forwards the call. No provider is rejected: an unrecognized api
-    string ([Config.Other]) is assumed to speak the OpenAI chat-completions
-    protocol with native tool calling, the de facto universal wire format. *)
+    Unrecognized api strings ({!Config.constructor-Other}) fall back to OpenAI
+    chat-completions. *)
 
 val call :
   ?max_tokens:int ->
@@ -16,6 +14,4 @@ val call :
   unit ->
   (Llm.assistant_turn, Transport.error) result
 (** [call ?max_tokens ~post ~provider ~api_key ~model ~tools ~messages ()]
-    dispatches a turn to the provider's adapter. [max_tokens] is the per-model
-    maxTokens from models.json, if any. The [post] closure is forwarded to the
-    selected adapter. *)
+    dispatches one turn to the adapter matching [provider.api]. *)

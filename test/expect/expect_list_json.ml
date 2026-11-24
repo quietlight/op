@@ -1,10 +1,5 @@
 open Op
 
-(* Pure-JSON renderer tests for `op --list --json`. The renderers take data
-   values and return one compact JSON line; bin/main.ml only adds data fetching,
-   stderr diagnostics, and exit codes. So we build fixtures directly and assert the
-   serialised string — the same in-process style as expect_agent_loop.ml. *)
-
 let session ~id ~timestamp ~summary ~count =
   { Session_list.id; timestamp; summary; count }
 

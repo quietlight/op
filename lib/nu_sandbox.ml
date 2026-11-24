@@ -1,12 +1,5 @@
-(* The nu tool's runtime: everything between "the profile says nu may run
-   these" and a spawned nu child that can run only those. See nu_sandbox.mli. *)
-
-(* First hit for [name] on the [Util.path_list_sep]-separated [path] (a small [which] walk).
-   Requires an executable regular file, as a real [which] does: [Sys.file_exists]
-   alone also matches a *directory* named e.g. "nu", which would then be
-   symlinked into the toolbox as if it were the tool, or handed to
-   [register_plugin] to execute. Follows symlinks ([Unix.stat], not [lstat]) —
-   a PATH entry that is a symlink to the real binary is the normal case. *)
+(* Require an executable regular file (following symlinks) so a directory named
+   e.g. "nu" is never symlinked or executed. *)
 let which ~path name =
   let is_executable_file candidate =
     match Unix.stat candidate with
@@ -24,8 +17,6 @@ let which ~path name =
         let candidate = Filename.concat dir name in
         if is_executable_file candidate then Some candidate else None)
 
-(* Remove the toolbox temp dir and its symlinks. op is one-shot, so this runs
-   at process exit; best-effort, since a leaked temp dir must never abort a run. *)
 let cleanup_toolbox dir =
   (try
      Sys.readdir dir
@@ -34,10 +25,6 @@ let cleanup_toolbox dir =
    with Sys_error _ -> ());
   try Unix.rmdir dir with Unix.Unix_error _ -> ()
 
-(* Build the per-run toolbox: a fresh temp dir of symlinks to each allowed
-   external, resolved against the host [path]. Names not found are skipped with
-   a stderr warning (a nu script naming a missing external will simply fail at
-   runtime). The dir is the nu process's entire PATH, cleaned up at exit. *)
 let build_toolbox ~warn ~path ~externals =
   let dir = Filename.temp_dir ~perms:0o700 "op-toolbox" "" in
   at_exit (fun () -> cleanup_toolbox dir);
@@ -63,8 +50,7 @@ let expand_home path =
     | None -> path
   else path
 
-(* Expand every configured module dir for nu's include path. Missing dirs are
-   warned once but retained: an agent may create the dir and a module mid-run. *)
+(* Keep missing dirs in the include path so an agent can create them mid-run. *)
 let module_include_path ~warn dirs =
   match List.map expand_home dirs with
   | [] -> None
@@ -79,9 +65,6 @@ let module_include_path ~warn dirs =
         dirs;
       Some (dirs, String.concat Util.path_list_sep dirs)
 
-(* Build a scanner that re-reads [*.nu] files on each call. Missing dirs are
-   silently skipped after the startup warning; first dir wins name collisions,
-   mirroring PATH. Dot-prefixed modules retain the existing behavior. *)
 let scan_module_sources ~warn dirs () =
   let read_dir dir =
     if not (Sys.file_exists dir && Sys.is_directory dir) then []
@@ -91,12 +74,8 @@ let scan_module_sources ~warn dirs () =
           if not (Filename.check_suffix name ".nu") then None
           else
             let path = Filename.concat dir name in
-            (* Cap the read: module dirs are writable by the nu tool alone, so a
-               runaway run can drop a huge .nu file that would otherwise be read
-               in full on every gate call (memory), and fed to `nu ast`. Skip an
-               oversized file, or a FIFO or device named *.nu, before reading
-               it; it becomes un-importable (a clean "module not found" deny)
-               rather than an amplifier or a hang. *)
+            (* Cap before reading: module dirs are run-writable, so oversized
+               files or devices must be skipped before entering memory/AST. *)
             match Util.read_file_capped ~max:Gate_nu.max_script_chars path with
             | Ok source -> Some (name, source)
             | Error msg ->
@@ -110,33 +89,14 @@ let scan_module_sources ~warn dirs () =
        []
   |> List.rev
 
-(* The names every profile inherits: locale, home and temp dir — enough for a
-   script (and the build drivers a [pathMode: host] profile allows) to behave
-   normally, and nothing that carries a credential. Anything else a profile
-   needs is named in its [envAllow]. *)
 let base_env_allow =
   [ "HOME"; "USER"; "LOGNAME"; "LANG"; "LC_ALL"; "TERM"; "TMPDIR"; "TZ" ]
 
-(* The nu child's environment: an *allowlist* of the host env — [base_env_allow]
-   plus the profile's [envAllow] — with PATH replaced by [child_path] (the
-   toolbox dir, or toolbox:host for a [pathMode: host] profile), plus the
-   OP_HOST_PATH handshake (so a nested op restores its real PATH), an
-   incremented OP_DEPTH (so op->nu->op recursion is bounded), and the
-   OP_NU_PROFILE / OP_NU_EXTERNALS / OP_NU_MODULES introspection vars so a
-   script can see which profile it runs under and what that profile grants.
-
-   Allowlist, not deny-list: reading [$env] needs no external command and names
-   no sensitive path, so neither gate layer fires on it — an inherited
-   ANTHROPIC_API_KEY or SSH_AUTH_SOCK would be one clean-verdict line of nu away
-   from the tool result, and thence the model and the provider. A name-pattern
-   blocklist would fail open on the next variable someone invents; the set a
-   sandboxed script legitimately needs is small enough to enumerate. *)
+(* Strict allowlist: reading [$env] in nu bypasses both gate layers, so only
+   explicitly allowed host variables may cross into the child. *)
 let child_env ~host_env ~child_path ~host_path ~depth ~profile_name ~externals
     ~module_names ~env_allow =
   let allowed = base_env_allow @ env_allow in
-  (* Split at '=' rather than matching a "NAME=" prefix, so HOME admits HOME
-     alone and not HOMEBREW_PREFIX. The OP_* / PATH entries appended below need
-     no exclusion here: an allowlist cannot admit them in the first place. *)
   let inherited =
     Array.to_list host_env
     |> List.filter (fun kv ->
@@ -155,11 +115,8 @@ let child_env ~host_env ~child_path ~host_path ~depth ~profile_name ~externals
         "OP_NU_MODULES=" ^ String.concat "," module_names;
       ])
 
-(* Write the empty env/config stubs that replace [--no-config-file] (which
-   hard-disables the plugin registry in nu 0.114); returns the stub dir. They
-   are truncated on every run, not just created: nu runs them ungated before
-   each script, so a stub that had gained content would be code planted once
-   and run forever. *)
+(* Truncate env/config stubs on every run: nu executes them ungated before each
+   script when [--plugin-config] replaces [--no-config-file]. *)
 let ensure_stub_dir agent_dir =
   let stub_dir = Filename.concat agent_dir "nu-stubs" in
   (try Unix.mkdir stub_dir 0o700
@@ -169,8 +126,6 @@ let ensure_stub_dir agent_dir =
     [ "env.nu"; "config.nu" ];
   stub_dir
 
-(* The plugins' own declared commands, for the tool description; when the
-   registry cannot be read the description falls back to bare names. *)
 let plugin_catalog ~warn ~proc_mgr ~clock ~executable ~registry =
   match Nu.plugin_commands ~proc_mgr ~clock ~executable ~registry with
   | Ok commands -> commands
@@ -178,12 +133,8 @@ let plugin_catalog ~warn ~proc_mgr ~clock ~executable ~registry =
       Fmt.kstr warn "nu plugins: %s" msg;
       []
 
-(* One registry per profile. A registry lists every plugin `plugin use` can
-   load, so a shared file would let a profile load (and be told about) the
-   plugins of whichever profile registered last. The profile name is a JSON
-   key, so anything outside a conservative set is flattened to '_' — and a
-   name that needed flattening also carries a digest of the original, so
-   [data/dev] and [data_dev] do not land on the same file. *)
+(* One registry per profile; append a short hash when sanitizing characters so
+   e.g. [data/dev] and [data_dev] stay distinct. *)
 let registry_path ~agent_dir ~profile_name =
   let safe =
     String.map
@@ -200,10 +151,6 @@ let registry_path ~agent_dir ~profile_name =
   in
   Filename.concat agent_dir (Fmt.str "nu-plugin-%s.msgpackz" stem)
 
-(* Resolve [nu_plugin_<name>] binaries and (re)build the profile's op-managed
-   plugin registry when it is missing or older than a binary. [plugin add] executes
-   the binary, so only profile-listed plugins ever run. Unresolvable or
-   unregisterable plugins are warned and dropped, like missing externals. *)
 let setup_plugins ~warn ~proc_mgr ~clock ~executable ~host_path ~profile_name
     names =
   let mtime path =
@@ -231,9 +178,8 @@ let setup_plugins ~warn ~proc_mgr ~clock ~executable ~host_path ~profile_name
                 None)
           names
       in
-      (* Stale when a plugin binary — or settings.json, where the plugin list
-         lives — is newer than the registry: a freshly listed plugin must
-         trigger a rebuild even though its binary predates the registry. *)
+      (* Rebuild when [settings.json] or any plugin binary is newer than the
+         cached registry. *)
       let stale =
         match mtime registry with
         | None -> resolved <> []
@@ -268,8 +214,6 @@ let setup_plugins ~warn ~proc_mgr ~clock ~executable ~host_path ~profile_name
           in
           Some { Nu.names; registry; stub_dir; commands })
 
-(* Build the nu tool and its gate, or warn and return [None] when nu itself is
-   not installed (the tool is then simply absent from the run). *)
 let setup ~proc_mgr ~clock ~warn ~(profile : Config.nu_profile) ~depth =
   let host_path = try Sys.getenv "PATH" with Not_found -> "" in
   match which ~path:host_path "nu" with
@@ -298,10 +242,7 @@ let setup ~proc_mgr ~clock ~warn ~(profile : Config.nu_profile) ~depth =
         match plugins with Some p -> p.Nu.names | None -> []
       in
       let toolbox_dir = build_toolbox ~warn ~path:host_path ~externals in
-      (* Toolbox first either way, so the script's own externals resolve
-         through the vetted symlinks; Host appends the host PATH for the
-         subprocess tree (make -> gcc), which allowlisting the build drivers
-         already conceded. *)
+      (* Toolbox first in both modes; [Host] appends host PATH for build drivers. *)
       let child_path =
         match profile.path_mode with
         | Config.Toolbox -> toolbox_dir

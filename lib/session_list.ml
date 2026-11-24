@@ -1,13 +1,7 @@
-(* The [op --list] views of session files: one row per session, per message,
-   or per branch tip. See session_list.mli. *)
-
 module U = Yojson.Safe.Util
 
 let ( let* ) = Result.bind
 
-(* Preview text for [op --list messages]: like [concat_text] but images are
-   shown as an elided placeholder ([image image/png 312 KB]) rather than
-   dropped or dumped as base64. *)
 let preview_text = function
   | `String s -> s
   | content ->
@@ -30,13 +24,8 @@ let preview_text = function
           | _ -> None)
       |> String.concat " "
 
-(* [--context FILE] prepends a `<context file="…">…</context>` block per file to
-   the user's first message (see context.ml). That is op's boilerplate, not what
-   the user typed, and in a project that always passes the same CLAUDE.md it
-   makes every session's summary read [<context file=CLAUDE…] — identical rows
-   where the listing exists to tell sessions apart. So skip the leading blocks
-   and describe the prompt underneath. Unterminated or non-leading blocks are
-   left alone: this only trims what op is known to have prepended. *)
+(* Skip leading [<context file=...>] blocks prepended by [--context] so session
+   summaries show the user's prompt rather than repeated context boilerplate. *)
 let strip_context_blocks text =
   let close = "</context>" in
   let n = String.length close in
@@ -48,10 +37,7 @@ let strip_context_blocks text =
       | None -> s
       | Some i -> strip (String.sub s (i + n) (String.length s - i - n))
   in
-  (* A message that is *only* context still has to say something. *)
-  match strip text with
-  | "" -> text
-  | stripped -> stripped
+  match strip text with "" -> text | stripped -> stripped
 
 type summary = {
   id : string;
@@ -60,9 +46,7 @@ type summary = {
   count : int;
 }
 
-(* Whichever comes first: a session row is one line of a table, so a newline has
-   to end it even when a sentence carries on past one (a URL's dot used to win,
-   printing the line break into the listing). *)
+(* Stop at the first '.' or '\n' so session rows stay single-line. *)
 let first_sentence s =
   let cut_at =
     match (String.index_opt s '.', String.index_opt s '\n') with
@@ -94,8 +78,6 @@ let first_user_summary entries =
       Util.truncate ~max_bytes:80 (first_sentence text)
   | None -> ""
 
-(* Number of conversational message entries (user/assistant/toolResult) — a
-   rough size signal so similar-looking sessions can be told apart. *)
 let message_count entries =
   List.fold_left
     (fun n e -> if U.member "type" e = `String "message" then n + 1 else n)
@@ -135,8 +117,6 @@ type entry_summary = {
   is_fork : bool;
 }
 
-(* Summarise an assistant turn's tool calls, used as the preview when the turn
-   carried no text (a tool-only turn). e.g. "→ edit lib/session.ml, nu ls". *)
 let tool_calls_hint content =
   match content with
   | `List blocks -> (
@@ -165,8 +145,6 @@ let tool_calls_hint content =
       | hints -> Util.truncate ~max_bytes:80 ("→ " ^ String.concat ", " hints))
   | _ -> ""
 
-(* Count children per entry id (across all entry types) so an entry with more
-   than one child can be flagged as a fork point. *)
 let child_counts entries =
   let tbl = Hashtbl.create 64 in
   List.iter
@@ -179,8 +157,6 @@ let child_counts entries =
     entries;
   tbl
 
-(* The [(role, preview)] pair a listing shows for a conversational entry;
-   [None] for tool results and metadata entries, which have nothing to show. *)
 let role_and_preview entry =
   match U.member "type" entry with
   | `String "message" -> (
@@ -197,7 +173,6 @@ let role_and_preview entry =
       | _ -> None)
   | _ -> None
 
-(* A user/assistant entry as an [entry_summary]; [None] for other entries. *)
 let entry_summary_of children entry =
   match role_and_preview entry with
   | None -> None
@@ -224,11 +199,8 @@ type branch_tip = {
   timestamp : string;
 }
 
-(* A tip is whatever entry the branch ends on — routinely a tool result or a
-   metadata entry, which carry no text of their own. Walk [parentId]-ward to
-   the nearest conversational entry so the tip is described by something a
-   human recognises; the tree's id index makes each hop O(1), and the entry count
-   bounds the walk so a corrupt parent cycle cannot spin. *)
+(* Walk [parentId] links to the nearest user/assistant entry; [fuel] prevents
+   spinning on a corrupt parent cycle. *)
 let describe_tip tree ~fuel id =
   let rec walk fuel id =
     if fuel <= 0 then None

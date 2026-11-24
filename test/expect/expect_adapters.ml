@@ -181,9 +181,6 @@ let%expect_test "openai reasoning round trip" =
     usage: none
     |}]
 
-(* A provider that reports a cache count at or above its own prompt total (the
-   whole prompt was a cache hit, or it simply miscounts) must not produce a
-   negative uncached figure — the context gauge would read backwards. *)
 let%expect_test "openai usage: fully cached prompt clamps at zero" =
   let response =
     {json|{"choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":100,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":128}}}|json}

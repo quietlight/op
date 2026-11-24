@@ -1,4 +1,3 @@
-(* Section-local helpers (shared shape with the other adapter tests). *)
 let turn ?(text = "") ?(thinking = None) ?(usage = None) tool_calls :
     Op.Llm.assistant_turn =
   { text; thinking; tool_calls; usage }
@@ -61,7 +60,6 @@ let test_google_serializes_messages () =
     |> Yojson.Safe.from_string
   in
   let open Yojson.Safe.Util in
-  (* System text becomes systemInstruction, not a content entry. *)
   Alcotest.(check string)
     "system instruction" "sys"
     (member "systemInstruction" json
@@ -71,7 +69,6 @@ let test_google_serializes_messages () =
     "roles"
     [ "user"; "model"; "user" ]
     (List.map (fun c -> member "role" c |> to_string) contents);
-  (* Assistant content has a text part then a functionCall part. *)
   let model_parts = List.nth contents 1 |> member "parts" |> to_list in
   Alcotest.(check string)
     "assistant text" "let me look"
@@ -81,7 +78,6 @@ let test_google_serializes_messages () =
   Alcotest.(check string)
     "fc args" "ls"
     (member "args" fc |> member "command" |> to_string);
-  (* Tool result becomes a functionResponse part keyed by name. *)
   let resp =
     List.nth contents 2 |> member "parts" |> to_list |> List.hd
     |> member "functionResponse"
@@ -92,7 +88,6 @@ let test_google_serializes_messages () =
     (member "response" resp |> member "output" |> to_string)
 
 let test_google_merges_tool_results () =
-  (* Two consecutive tool results must land in a single user content. *)
   let messages =
     [
       Op.Llm.Tool
@@ -123,7 +118,6 @@ let test_google_merges_tool_results () =
   Alcotest.(check int)
     "two parts" 2
     (List.hd contents |> member "parts" |> to_list |> List.length);
-  (* Error result wraps content under "error". *)
   let parts = List.hd contents |> member "parts" |> to_list in
   Alcotest.(check string)
     "error key" "y"
@@ -183,9 +177,6 @@ let test_google_parse_usage () =
       Alcotest.(check string) "text" "Hello there" turn.text;
       Alcotest.(check int) "no tool calls" 0 (List.length turn.tool_calls);
       match turn.usage with
-      (* promptTokenCount (1200) is the whole prompt and includes
-         cachedContentTokenCount (1024); Llm.usage keeps the fields disjoint,
-         so input is the 176 uncached tokens. *)
       | Some { input; output; cache_read; cache_creation } ->
           Alcotest.(check int) "uncached input" 176 input;
           Alcotest.(check int) "output" 88 output;
@@ -196,7 +187,6 @@ let test_google_parse_usage () =
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_google_parse_function_call () =
-  (* Gemini 3.x emits its own call id; the adapter must use it (not synthesize). *)
   let json =
     {|{"candidates":[{"content":{"parts":[{"functionCall":{"name":"bash","args":{"command":"ls"},"id":"o3syfqcz"}}]}}]}|}
   in
@@ -215,8 +205,6 @@ let test_google_parse_function_call () =
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_google_parse_thought_signature () =
-  (* A thoughtSignature on the functionCall part must be captured into thinking
-     so it can be echoed back next turn (mandatory on Gemini 3.x). *)
   let json =
     {|{"candidates":[{"content":{"parts":[{"functionCall":{"name":"bash","args":{},"id":"c1"},"thoughtSignature":"abc123"}]}}]}|}
   in
@@ -230,9 +218,6 @@ let test_google_parse_thought_signature () =
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_google_echoes_thought_signature () =
-  (* Replaying an assistant turn must put the signature part-level on the first
-     functionCall part and echo each call's id; the tool result echoes the id
-     inside functionResponse. *)
   let messages =
     [
       Op.Llm.Assistant

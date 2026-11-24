@@ -1,10 +1,3 @@
-(* Tests for the OpenAI Responses API adapter (/responses).
-
-   The Responses wire shape differs from chat-completions: history is an [input]
-   array of typed items, tool specs are flat, and the reply is a top-level
-   [output] array. These cover serialization (input items, flat tools,
-   max_output_tokens) and parsing (text, function_call, reasoning, usage). *)
-
 let turn ?(text = "") ?(thinking = None) ?(usage = None) tool_calls :
     Op.Llm.assistant_turn =
   { text; thinking; tool_calls; usage }
@@ -27,8 +20,6 @@ let test_responses_tool_specs () =
   | [ spec ] ->
       let open Yojson.Safe.Util in
       Alcotest.(check string) "type" "function" (member "type" spec |> to_string);
-      (* Flat: name/description/parameters sit directly on the spec, not nested
-         under a "function" key like chat-completions. *)
       Alcotest.(check string) "name" "bash" (member "name" spec |> to_string);
       Alcotest.(check bool)
         "no nested function" true
@@ -72,13 +63,11 @@ let test_responses_serializes_input () =
     (member "tool_choice" json = `Null);
   Alcotest.(check bool) "store false" true (member "store" json = `Bool false);
   let input = member "input" json |> to_list in
-  (* system + user + (assistant message + function_call) + function_call_output *)
   Alcotest.(check int) "five input items" 5 (List.length input);
   let item n = List.nth input n in
   Alcotest.(check string)
     "system role" "system"
     (member "role" (item 0) |> to_string);
-  (* User content is wrapped as input_text parts. *)
   let user_part = member "content" (item 1) |> to_list |> List.hd in
   Alcotest.(check string)
     "user part type" "input_text"
@@ -86,7 +75,6 @@ let test_responses_serializes_input () =
   Alcotest.(check string)
     "user text" "hello"
     (member "text" user_part |> to_string);
-  (* Assistant text becomes a message item with output_text. *)
   Alcotest.(check string)
     "assistant item type" "message"
     (member "type" (item 2) |> to_string);
@@ -94,7 +82,6 @@ let test_responses_serializes_input () =
   Alcotest.(check string)
     "output_text type" "output_text"
     (member "type" out_part |> to_string);
-  (* Tool call is its own function_call item; arguments is a JSON string. *)
   Alcotest.(check string)
     "function_call type" "function_call"
     (member "type" (item 3) |> to_string);
@@ -104,7 +91,6 @@ let test_responses_serializes_input () =
   Alcotest.(check bool)
     "arguments is a string" true
     (match member "arguments" (item 3) with `String _ -> true | _ -> false);
-  (* Tool result is a function_call_output keyed by call_id. *)
   Alcotest.(check string)
     "output item type" "function_call_output"
     (member "type" (item 4) |> to_string);
@@ -116,7 +102,6 @@ let test_responses_serializes_input () =
     (member "output" (item 4) |> to_string)
 
 let test_responses_empty_assistant () =
-  (* An assistant turn with no text emits only the function_call item. *)
   let messages =
     [ Op.Llm.Assistant (turn [ tool_call ~id:"c1" ~name:"bash" () ]) ]
   in
@@ -152,8 +137,6 @@ let test_responses_error_prefix () =
     "error output prefixed" "Error: no such file"
     (member "output" item |> to_string)
 
-(* A non-empty tool set is advertised with tool_choice auto; the empty case
-   (both fields omitted) is covered in test_responses_serializes_input. *)
 let test_responses_tools_advertised () =
   let tool : Op.Tool.t =
     {
@@ -199,8 +182,6 @@ let test_responses_text_usage () =
       Alcotest.(check string) "text" "Done!" turn.text;
       Alcotest.(check int) "no tool calls" 0 (List.length turn.tool_calls);
       match turn.usage with
-      (* input_tokens (56) is the whole prompt and includes cached_tokens
-         (40); Llm.usage keeps the fields disjoint. *)
       | Some { input; output; cache_read; _ } ->
           Alcotest.(check int) "uncached input" 16 input;
           Alcotest.(check int) "usage output" 78 output;
@@ -234,14 +215,12 @@ let test_responses_parse_reasoning () =
       Alcotest.(check string) "text" "answer" turn.text;
       match turn.thinking with
       | Some (Reasoning { text; signature }) ->
-          (* Captured but never replayed: signature is [None]. *)
           Alcotest.(check (option string)) "signature" None signature;
           Alcotest.(check string) "text" "step one\n\nstep two" text
       | _ -> Alcotest.fail "expected reasoning")
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_responses_reasoning_fallback () =
-  (* No summary parts: fall back to the reasoning item's content parts. *)
   let json =
     {|{"id":"resp_1","output":[{"type":"reasoning","content":[{"type":"reasoning_text","text":"raw chain"}]}],"status":"completed"}|}
   in

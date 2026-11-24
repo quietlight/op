@@ -1,8 +1,5 @@
-(** HTTPS transport and shared JSON parsing helpers for provider adapters.
-
-    Provides:
-    - HTTPS POST transport (TLS, 120s timeout) via [post]
-    - JSON parsing helpers shared across adapters *)
+(** HTTPS POST transport (TLS, 300s timeout) and shared JSON parsing helpers for
+    provider adapters. *)
 
 type error =
   | Json_error of string
@@ -15,30 +12,28 @@ type error =
   | File_error of string
 
 val pp_error : error -> string
-(** [pp_error e] Return a human-readable description of [e]. *)
+(** [pp_error e] formats [e] for display. *)
 
 type post_fn =
   url:string ->
   headers:(string * string) list ->
   body:string ->
   (string, error) result
-(** [post_fn] A configured HTTP POST. Adapters receive {!val-post} as a closure
-    of this type so they stay free of TLS/Eio concerns;
-    [Transport.post ~tls_config ~net ~clock] partially applied has this type. *)
+(** Configured HTTP POST closure passed to adapters. *)
 
-(** {2 Parsing helpers shared with the provider adapters} *)
+(** {2 Parsing helpers} *)
 
 val json_of_string : string -> (Yojson.Safe.t, error) result
-(** [json_of_string s] Parse a JSON string, mapping syntax errors to
+(** [json_of_string s] parses JSON, mapping syntax errors to
     {!constructor-Json_error}. *)
 
 val check_error : Yojson.Safe.t -> (unit, error) result
-(** [check_error json] Surface a top-level [{ "error": ... }] from a provider
-    response. *)
+(** [check_error json] fails with {!constructor-Api_error} if [json] has a
+    top-level ["error"] field. *)
 
 val list_field : string -> Yojson.Safe.t -> (Yojson.Safe.t list, error) result
-(** [list_field field json] Read [field] as a JSON array, distinguishing missing
-    from malformed. *)
+(** [list_field field json] reads [field] as a JSON array, distinguishing
+    missing from malformed. *)
 
 val post :
   tls_config:Tls.Config.client ->
@@ -48,33 +43,24 @@ val post :
   headers:(string * string) list ->
   body:string ->
   (string, error) result
-(** [post ~tls_config ~net ~clock ~url ~headers ~body] Shared HTTPS POST
-    transport (TLS, 120s timeout). The response body is returned on success;
-    non-2xx becomes an {!constructor-Http_error}. Rate limits (429) and server
-    errors (5xx) are retried up to 3 attempts with capped exponential backoff,
-    honouring a numeric [Retry-After] header when present. The [tls_config]
-    should be built once at startup via [tls_config] and reused across calls.
-    Callers typically partially apply [tls_config], [net], and [clock] to obtain
-    a {!type-post_fn}, which is then handed to adapters. *)
+(** [post ~tls_config ~net ~clock ~url ~headers ~body] performs an HTTPS POST
+    (300s timeout). Retries 429 and 5xx up to 3 attempts with capped exponential
+    backoff, honoring numeric [Retry-After]. *)
 
 val strip_trailing_slash : string -> string
-(** [strip_trailing_slash s] Drop a single trailing ['/'] so [base_url] joins
-    cleanly with a path. *)
+(** [strip_trailing_slash s] drops a single trailing ['/']. *)
 
 val tls_config : unit -> (Tls.Config.client, error) result
-(** [tls_config ()] Build a TLS client config from the system CA bundle. Exposed
-    so callers can cache it across requests. *)
+(** [tls_config ()] builds a TLS client config from the system CA bundle. *)
 
-(** Internal hooks for retry-policy tests (no network involved). *)
+(** Internal hooks for retry and body-limit tests. *)
 module For_testing : sig
   val retryable : error -> bool
-  (** [retryable e] is [true] when [e] is worth retrying (429s and 5xx), [false]
-      for client and transport errors. *)
+  (** [retryable e] is [true] for 429 and 5xx HTTP errors. *)
 
   val retry_delay : hint:float option -> int -> float
-  (** [retry_delay ~hint n] is the backoff delay (seconds) before attempt [n]: a
-      server [Retry-After] [hint] when present, else exponential backoff,
-      capped. *)
+  (** [retry_delay ~hint n] returns backoff delay in seconds before attempt [n],
+      preferring [hint] and capped. *)
 
   val with_retries :
     sleep:(float -> unit) ->
@@ -85,13 +71,12 @@ module For_testing : sig
       calling [sleep] between retryable failures. *)
 
   val read_body : limit:int -> _ Eio.Flow.source -> (string, int) result
-  (** [read_body ~limit flow] reads [flow] to end of input, or [Error limit] if
-      it would exceed [limit] bytes. *)
+  (** [read_body ~limit flow] reads [flow] up to [limit] bytes or returns
+      [Error limit]. *)
 
   val max_response_bytes : int
-  (** Cap on a successful provider response body. *)
+  (** Byte cap on a successful response body. *)
 
   val max_error_body_bytes : int
-  (** Cap on an error response body — much smaller, since these are short by
-      construction and get propagated into results. *)
+  (** Byte cap on an error response body. *)
 end

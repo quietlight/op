@@ -1,66 +1,43 @@
-(** Pure JSON renderers for the prompt-run [op --json] result object, and the
-    exit-code classification shared by the [--json] and human paths.
+(** Prompt-run JSON result envelopes and exit-code classification.
 
-    Mirrors {!List_report}: each renderer returns one compact JSON line for
-    stdout — or, in the [_json] variants, the envelope value the line is made
-    of, which {!Render} formats for the default human output. [bin/main.ml] owns
-    data fetching, stderr diagnostics, and exit codes. Side-effect-free so they
-    are unit/expect-testable.
-
-    Field names are camelCase to match the [--list] envelopes: [sessionId],
-    [parentId], [stopReason], [isError], etc. *)
+    Field names are camelCase ([sessionId], [parentId], [stopReason], [isError])
+    to match {!List_report}. *)
 
 val sum_usage : ?base:int -> Llm.message list -> Llm.usage option
-(** [sum_usage ?base history] totals the reported usage across the assistant
-    turns of [history], or [None] when no turn carried usage. All four fields —
-    including [cache_read] and [cache_creation] — are summed, so callers can
-    report the true prompt volume rather than just the uncached [input]. [base]
-    (default [0]) skips that many leading messages: a resumed run passes the
-    length of the replayed history so the report covers only this run's turns,
-    which {!Session_read.messages} would otherwise double-count now that it
-    restores the recorded usage. *)
+(** [sum_usage ?base history] totals reported usage across assistant turns after
+    skipping [base] leading messages (default 0, used to exclude replayed turns
+    on resume). *)
 
 val context_tokens : Llm.usage -> int
-(** [context_tokens u] is the window occupancy of one turn:
-    [input + output + cache_read + cache_creation]. The cache counts are part of
-    the prompt, so a heavily cached thread is not mistaken for an empty one. *)
+(** [context_tokens u] is [input + output + cache_read + cache_creation]. *)
 
 val context_usage : Llm.message list -> Llm.usage option
-(** [context_usage history] is the usage of the {e last} assistant turn that
-    reported any — the current occupancy of the context window, as opposed to
-    {!sum_usage}'s lifetime total. [None] when no turn reported usage. *)
+(** [context_usage history] returns the usage of the last assistant turn that
+    reported any (current window occupancy). *)
 
 val context_fields :
   window:int option -> Llm.message list -> (string * Yojson.Safe.t) list
-(** [context_fields ~window history] is the envelope's [context] object —
-    [{tokens, window, pct}], [pct] rounded to two decimals — or [[]] when either
-    the window (no [contextWindow] in models.json) or the occupancy (no turn
-    reported usage) is unknown. Callers fold it into {!val-result}'s [metadata].
-*)
+(** [context_fields ~window history] returns
+    [("context", {tokens, window, pct})] with [pct] rounded to two decimals, or
+    [[]] if window or usage is unknown. *)
 
 val tokens_line : Llm.usage -> string
-(** [tokens_line u] renders the human stderr token summary, e.g.
-    [{|tokens: 3 in, 50 out (1259 cache read, 0 cache write)|}]. The cache
-    counts are appended only when nonzero, so a non-caching run stays the terse
-    [{|tokens: N in, N out|}]. *)
+(** [tokens_line u] formats ["tokens: N in, N out"], appending cache counts only
+    when non-zero. *)
 
 type classification = {
   is_error : bool;
   exit_code : int;
   stop_reason : string option;
-      (** [["finished"]] | [["max_steps"]] | [["gate_killed"]] |
-          [["context_limit"]] for a completed/truncated/gate-terminated/
-          context-capped run; [None] for a hard failure (the {!val-error}
-          envelope carries no [stopReason]). *)
+      (** ["finished"], ["max_steps"], ["gate_killed"], ["context_limit"], or
+          [None] for hard failures. *)
 }
-(** A run's machine classification — the single source of truth for [isError]
-    and the exit code. {!field-exit_code} is [0] iff {!field-is_error} is
-    [false]. *)
+(** Single source of truth for [isError] and exit code ([0] iff [not is_error]).
+*)
 
 val classify : ('a * Agent.outcome, 'b) result -> classification
-(** [classify result] derives the classification from an agent-loop result. A
-    truncated run ([Max_steps_reached]) is an error: a parent agent budgeting on
-    [isError] (or [$?]) must see a non-complete run as non-success. *)
+(** [classify result] maps an agent-loop result to its exit code and
+    [stopReason]. Non-[Finished] outcomes are errors. *)
 
 val result_json :
   ?typed:bool ->
@@ -76,11 +53,9 @@ val result_json :
   unit ->
   Yojson.Safe.t
 (** [result_json ?typed ~answer ~session_fields ~model ~input ~output
-     ~cache_read ~cache_write ~metadata ~outcome ()] is {!val-result}'s envelope
-    before serialisation — the same object, as JSON. The human renderer
-    ({!Render.footer}) formats this value rather than reconstructing the run's
-    numbers itself, so the two output modes can never disagree about what a run
-    reported. *)
+     ~cache_read ~cache_write ~metadata ~outcome ()] builds the result envelope
+    JSON (shared with {!Render.footer}). [typed] prepends [("type", "result")]
+    for [--stream]. *)
 
 val result :
   ?typed:bool ->
@@ -96,12 +71,8 @@ val result :
   unit ->
   string
 (** [result ?typed ~answer ~session_fields ~model ~input ~output ~cache_read
-     ~cache_write ~metadata ~outcome ()] renders the Ok envelope for a completed
-    or truncated run. The [tokens] object carries [input], [output], [cacheRead]
-    and [cacheWrite] (the last two mirroring the session-log usage object, so a
-    parent can budget on the real prompt volume). [isError] and [stopReason] are
-    derived from [outcome]; [answer] is retained even on truncation (a partial
-    answer is useful for salvage/resume). *)
+     ~cache_write ~metadata ~outcome ()] serializes {!result_json} as one
+    compact JSON line. *)
 
 val error_json :
   ?typed:bool ->
@@ -112,8 +83,8 @@ val error_json :
   ?metadata:(string * Yojson.Safe.t) list ->
   unit ->
   Yojson.Safe.t
-(** [error_json ?typed ~msg ?hint ?session_fields ?model ?metadata ()] is
-    {!val-error}'s envelope before serialisation. See {!result_json}. *)
+(** [error_json ?typed ~msg ?hint ?session_fields ?model ?metadata ()] builds
+    the hard-failure envelope JSON. *)
 
 val error :
   ?typed:bool ->
@@ -124,27 +95,22 @@ val error :
   ?metadata:(string * Yojson.Safe.t) list ->
   unit ->
   string
-(** [error ?typed ~msg ?hint ?session_fields ?model ?metadata ()] renders the
-    hard-failure envelope [{"error":…,"isError":true}]. [session_fields] and
-    [model] are optional so early failures (prompt resolution, config load, TLS)
-    — where the model and session are not yet known — render as the bare
-    [{"error","isError"}] shape. *)
+(** [error ?typed ~msg ?hint ?session_fields ?model ?metadata ()] serializes
+    {!error_json} as one compact JSON line. *)
 
 (** {1 Envelope fields derived from the run} *)
 
 val last_assistant_text : Llm.message list -> string option
-(** [last_assistant_text history] returns the last non-empty assistant text in
-    [history], if any. *)
+(** [last_assistant_text history] returns the last non-empty assistant text. *)
 
 val run_metadata : base:int -> Llm.message list -> (string * Yojson.Safe.t) list
-(** [run_metadata ~base history] summarizes turns and tool results added after
-    [base] messages. *)
+(** [run_metadata ~base history] summarizes turns, tool calls, tool errors, and
+    unique tool names added after [base] messages. *)
 
 val session_fields : Session.t option -> (string * Yojson.Safe.t) list
-(** [session_fields session] returns [sessionId] and [parentId] fields for the
-    prompt-run JSON envelope. *)
+(** [session_fields session] returns [sessionId] and optional [parentId] fields.
+*)
 
 val branch_correction_metadata :
   (string * string) option -> (string * Yojson.Safe.t) list
-(** [branch_correction_metadata c] returns JSON fields for a redirected branch
-    point. *)
+(** [branch_correction_metadata c] returns [branchCorrectedFrom]/[To] fields. *)

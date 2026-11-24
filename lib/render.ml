@@ -1,48 +1,11 @@
-(** Human-readable rendering of session entries — op's default stdout.
-
-    Per-tool detail: the file a [read] took and the slice it took, and the
-    actual nu script. Every function returns lines rather than printing them, so
-    the renderer is expect-testable and the caller decides which channel they
-    land on.
-
-    This is the one renderer: a run's own stdout, a replayed session file and
-    hop's live view all come through it (the last two via [op --render]). An
-    earlier Nushell renderer of the same layout, [pi-session-view.nu], lives
-    outside this repository as example nu and is not kept in step.
-
-    Stateful only because a [toolResult] entry names its call by id and nothing
-    else: to say which file a [read] result came from, the renderer has to
-    remember the call. That state is per-run, which is also why the same
-    {!type-t} replays a finished session file — entries do not care whether they
-    arrived live or off disk. *)
-
-(* Line budgets. Deliberately single constants: they are the whole tuning
-   surface of this module, and the right values are found by reading real runs
-   in a terminal, not by reasoning. *)
 let preview_lines = 5
-
-(* An error body is the one thing worth reading in full — a gate denial or a
-   compiler error is the reason you are watching at all. *)
 let error_preview_lines = 15
-
-(* nu gets a bigger budget than the other tools: its output is usually a table,
-   whose header and borders spend four lines before the first row. *)
 let nu_preview_lines = 10
 let script_lines = 15
 let thinking_lines = 5
-
-(* Argument values in the generic (unknown-tool) call summary. *)
 let value_chars = 60
-
-(* The before/after snippets on an [edit] call line. *)
 let edit_chars = 40
-
-(* Preview lines are cut to keep one logical line on one terminal row; read
-   results can carry 2000-character lines. *)
 let line_chars = 200
-
-(* Nesting for a call's or result's body, one step in from the [→]/[←] head.
-   Shallow on purpose: read results arrive with their own line-number gutter. *)
 let indent = "    "
 
 type t = {
@@ -55,10 +18,7 @@ type t = {
 let v ~color ?cwd ?(echo_user = false) () =
   { color; echo_user; calls = Hashtbl.create 64; cwd }
 
-(* --- JSON access ---------------------------------------------------------- *)
-
-(* Total on purpose: a renderer must never raise on a partial or foreign entry,
-   so a missing field and a wrong-typed one are the same nothing. *)
+(* Total JSON accessors so partial or foreign entries never raise. *)
 let mem name json =
   match json with `Assoc _ -> Yojson.Safe.Util.member name json | _ -> `Null
 
@@ -73,20 +33,14 @@ let num name json =
   | `Float f -> Some f
   | _ -> None
 
-(* --- text helpers --------------------------------------------------------- *)
-
 let lines s =
   match String.split_on_char '\n' s with
   | [ "" ] -> []
   | parts -> (
       match List.rev parts with "" :: rest -> List.rev rest | _ -> parts)
 
-(* Terminal control characters in model text or tool output — ESC above all:
-   colours, cursor moves, an OSC 52 clipboard write, a carriage return that
-   overprints a line — would act on the reader's terminal, and a file the
-   agent read is untrusted. Every string is scrubbed before rendering: CR is
-   dropped (CRLF files stay clean), other controls show as [?]. Newline and tab
-   stay for layout; the renderer's own colours are added afterwards. *)
+(* Scrub terminal control bytes before styling so untrusted text cannot emit
+   escape sequences or overwrite lines via CR. *)
 let is_control c = (c < ' ' && c <> '\n' && c <> '\t') || c = '\127'
 
 let scrub_string s =
@@ -111,13 +65,8 @@ let clip n s =
   else Util.drop_partial_utf8_tail (String.sub s 0 n) ^ "…"
 
 let flatten s = String.concat " " (String.split_on_char '\n' s) |> String.trim
-
-(* A JSON argument as the text a human wants to see: bare for a string, its
-   compact encoding otherwise. *)
 let text_of = function `String s -> s | v -> Yojson.Safe.to_string v
 
-(* Every [text] block of a message [content], joined. Tolerates the bare-string
-   form the session schema also allows. *)
 let block_text content =
   match content with
   | `List blocks ->
@@ -128,12 +77,7 @@ let block_text content =
   | `String s -> s
   | _ -> ""
 
-(* Paths are absolute in tool arguments; against a known cwd the run reads as
-   the project it is in rather than as a column of $HOME.
-
-   The separator is a literal "/", not [Filename.dir_sep]: session entries
-   carry the paths the tools saw, so this behaves the same whatever the host OS
-   thinks a separator is. *)
+(* Use literal "/" so session paths render consistently across host OSes. *)
 let rel t path =
   match t.cwd with
   | Some cwd when cwd <> "" && String.starts_with ~prefix:(cwd ^ "/") path ->
@@ -148,8 +92,6 @@ let human_bytes n =
   else if n < 1024 * 1024 then Fmt.str "%.1f kB" (f /. k)
   else Fmt.str "%.1f MB" (f /. k /. k)
 
-(* --- styling -------------------------------------------------------------- *)
-
 let sty t code s =
   if t.color && s <> "" then Fmt.str "\027[%sm%s\027[0m" code s else s
 
@@ -159,10 +101,6 @@ let green t = sty t "32"
 let yellow t = sty t "33"
 let magenta t = sty t "35"
 
-(* --- tool calls ----------------------------------------------------------- *)
-
-(* [read]'s slice, when it asked for one. [limit] without [offset] still starts
-   at line 1, so both forms name a range. *)
 let read_range args =
   match (int "offset" args, int "limit" args) with
   | None, None -> ""
@@ -179,9 +117,6 @@ let edit_summary t args =
     (rel t (str_or "path" ~default:"?" args))
     (snippet "old_string") (snippet "new_string") all
 
-(* The fallback for a tool this renderer does not know: a [k=v, k=v]
-   summary, so a new tool degrades to something readable instead of
-   nothing. *)
 let generic_summary args =
   match args with
   | `Assoc kvs ->
@@ -193,8 +128,6 @@ let generic_summary args =
   | `Null -> ""
   | v -> flatten (Yojson.Safe.to_string v)
 
-(* The nu script itself, indented under the call — the single most useful thing
-   to see in a run, and the one thing a one-line argument summary destroys. *)
 let script_block t args =
   let ls = lines (str_or "script" ~default:"" args) in
   let n = List.length ls in
@@ -205,10 +138,8 @@ let script_block t args =
     shown @ [ dim t (Fmt.str "%s…  %d lines total" indent n) ]
   else shown
 
-(* The name column is padded so the arguments line up down the run; the padding
-   is then trimmed off the right, since a call with nothing after its name (a nu
-   script at the default timeout) would otherwise leave trailing whitespace on
-   the line. *)
+(* Pad the tool-name column for alignment, then trim trailing spaces when [rest]
+   is empty. *)
 let head t arrow name rest =
   let s = Fmt.str "  %s %-5s %s" (magenta t arrow) name rest in
   let rec last i = if i > 0 && s.[i - 1] = ' ' then last (i - 1) else i in
@@ -221,10 +152,7 @@ let call_lines t name args =
   match name with
   | "read" -> [ call_head t name (path () ^ read_range args) ]
   | "glob" ->
-      (* The glob tool is gone (2026-11), but sessions recorded before then still
-         replay through here. The search root is worth naming only when it is not
-         the one glob would have defaulted to — an "in <cwd>" on every call is a wide column of
-         nothing. *)
+      (* Kept for replaying older sessions created before [glob] was removed. *)
       let where =
         match str "path" args with
         | Some p when Some p <> t.cwd -> "  in " ^ rel t p
@@ -244,8 +172,6 @@ let call_lines t name args =
       call_head t name timeout :: script_block t args
   | name -> [ call_head t name (generic_summary args) ]
 
-(* --- tool results --------------------------------------------------------- *)
-
 let result_head t name summary = head t "←" name summary
 
 let preview t ~limit text =
@@ -258,11 +184,7 @@ let preview t ~limit text =
   if n > limit then shown @ [ dim t (Fmt.str "%s…  %d lines total" indent n) ]
   else shown
 
-(* The footer [Nu.tool] appends to every nu result (lib/nu.ml: "%s\n(exit code:
-   %d)"). The two formats are kept in lockstep by hand, so match the whole
-   shape — prefix, closing paren, non-empty code — rather than slicing at fixed
-   offsets: a truncated or foreign line then simply fails to match instead of
-   raising out of [String.sub], and this module never raises on a partial log. *)
+(* Match the "(exit code: N)" footer appended by [Nu.tool]. *)
 let exit_prefix = "(exit code: "
 
 let exit_code_of line =
@@ -277,11 +199,6 @@ let exit_code_of line =
     | code -> Some code
   else None
 
-(* Lift that footer into the result's summary so the preview shows output rather
-   than bookkeeping. It is only ever nu's *last* line, which is the assumption
-   here: a script whose own output ended with exactly this shape would have it
-   eaten. That is the right trade — showing the status twice on every single nu
-   call costs more than mis-reading a line nothing produces in practice. *)
 let split_exit text =
   match List.rev (lines text) with
   | last :: rest -> (
@@ -290,18 +207,11 @@ let split_exit text =
       | None -> ("done", text))
   | [] -> ("done", text)
 
-(* What a result is worth saying in one line, given the call it answers. The
-   summaries are derived from the call and the shape of the output, never
-   scraped out of the tool's prose — except for write/edit, whose whole output
-   *is* one such line already. *)
 let result_summary t ~name ~args text =
   let n = List.length (lines text) in
   match name with
   | "read" -> (
       match str "path" args with
-      (* Without the call — a result whose [toolCall] this renderer never saw,
-         which a branch or a foreign log can produce — there is no path to
-         name. The count alone is still true; "?" would not be. *)
       | None -> (Fmt.str "%d lines" n, preview_lines)
       | Some path -> (Fmt.str "%s  %d lines" (rel t path) n, preview_lines))
   | "glob" -> (Fmt.str "%d paths" n, preview_lines)
@@ -309,9 +219,6 @@ let result_summary t ~name ~args text =
   | "nu" -> (fst (split_exit text), nu_preview_lines)
   | _ -> (Fmt.str "%d lines" n, preview_lines)
 
-(* The body a preview is taken from: nu's minus its exit-status footer, glob's
-   with the cwd stripped off every path — a glob result is a column of paths,
-   and absolute ones push the interesting tail off the right of the screen. *)
 let body_of t ~name text =
   match name with
   | "nu" -> snd (split_exit text)
@@ -331,7 +238,6 @@ let tool_result t m =
   in
   if bool "isError" m then
     let tag =
-      (* A failed nu call still has an exit code worth seeing beside the tag. *)
       match name with
       | "nu" -> Fmt.str "%s %s" (red t "[error]") (fst (split_exit text))
       | _ -> red t "[error]"
@@ -343,8 +249,6 @@ let tool_result t m =
     let body = body_of t ~name text in
     result_head t name summary
     :: (if limit = 0 then [] else preview t ~limit body)
-
-(* --- messages ------------------------------------------------------------- *)
 
 let thinking_block t b =
   match str "thinking" b with
@@ -366,7 +270,6 @@ let assistant_header t m =
     (sty t "34"
        (Fmt.str "[%s]  out=%d tok" (str_or "model" ~default:"?" m) out))
 
-(* A call is remembered so the result answering it can name the file it read. *)
 let remember t b =
   let name = str_or "name" ~default:"?" b in
   Option.iter
@@ -395,8 +298,6 @@ let message t m =
   | Some "toolResult" -> tool_result t m
   | _ -> []
 
-(* --- entries -------------------------------------------------------------- *)
-
 let session_header t e =
   t.cwd <- str "cwd" e;
   [
@@ -421,8 +322,6 @@ let entry t json =
   | Some "message" -> message t (mem "message" json)
   | _ -> []
 
-(* --- the run's tail ------------------------------------------------------- *)
-
 let rule t = dim t (String.concat "" (List.init 56 (fun _ -> "─")))
 
 let compact_tokens n =
@@ -431,8 +330,6 @@ let compact_tokens n =
   else if n < 1_000_000 then Fmt.str "%.1fk" (f /. 1000.)
   else Fmt.str "%.1fM" (f /. 1_000_000.)
 
-(* Matches hop's context-gauge thresholds: comfortable, getting full, past the
-   default contextLimit where op stops the run between turns. *)
 let gauge_color pct =
   if pct < 0.6 then green else if pct < 0.85 then yellow else red
 
@@ -506,16 +403,11 @@ let footer t env =
         | Some h -> [ dim t ("hint: " ^ h) ]
         | None -> []
       in
-      (* No leading blank: a hard failure usually happens before the run has
-         printed anything at all, and a stray first line reads as breakage. *)
       (red t ("error: " ^ msg) :: hint) @ resume_line t env
   | None ->
       ("" :: rule t :: outcome_line t env :: tokens_line t env)
       @ context_line t env @ resume_line t env
 
-(* One line of a session file or of [--stream]: an entry, or the stream's
-   closing result envelope. Blank and non-JSON lines render nothing, so a
-   truncated log or a stray diagnostic does not stop a replay. *)
 let line t text =
   match Yojson.Safe.from_string text with
   | exception Yojson.Json_error _ -> []

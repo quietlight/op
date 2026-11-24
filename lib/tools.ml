@@ -1,6 +1,3 @@
-(* The known tool names in canonical order. [--tools] selects a subset; [select]
-   builds the tool list in this order regardless of the request order, and drops
-   the caller-supplied nu tool when the caller did not supply it. *)
 let known = [ "read"; "write"; "edit"; "nu" ]
 let err fmt = Fmt.kstr (fun s -> Error s) fmt
 

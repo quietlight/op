@@ -1,9 +1,5 @@
-(* Anthropic Messages adapter: native tool_use / tool_result. All
-   Anthropic-specific wire shapes are confined to this module. See the .mli. *)
-
 let ( let* ) = Result.bind
 
-(* { name; description; input_schema = t.parameters } per tool. *)
 let tool_specs (tools : Tool.t list) : Yojson.Safe.t list =
   List.map
     (fun (t : Tool.t) ->
@@ -17,7 +13,6 @@ let tool_specs (tools : Tool.t list) : Yojson.Safe.t list =
 
 let text_block s = `Assoc [ ("type", `String "text"); ("text", `String s) ]
 
-(* Native Anthropic image block: base64 source with its media type. *)
 let image_block ~media_type ~data =
   `Assoc
     [
@@ -31,9 +26,6 @@ let image_block ~media_type ~data =
           ] );
     ]
 
-(* User content blocks: the text body (when non-empty) followed by each
-   attachment in order. A text-only message stays a single text block, matching
-   the pre-image wire shape. *)
 let user_blocks ~text ~blocks =
   let text_blocks =
     if text = "" && blocks <> [] then [] else [ text_block text ]
@@ -45,17 +37,13 @@ let user_blocks ~text ~blocks =
         | Llm.Image { media_type; data } -> image_block ~media_type ~data)
       blocks
 
-(* Map one neutral message to (role, content-blocks). [System] is handled
-   separately (it becomes the top-level [system] field), so it yields [None]. *)
 let blocks_of_message : Llm.message -> (string * Yojson.Safe.t list) option =
   function
   | System _ -> None
   | User { text; blocks } -> Some ("user", user_blocks ~text ~blocks)
   | Assistant { text; thinking; tool_calls; _ } ->
-      (* Anthropic requires thinking blocks to come first, and rejects a
-         [thinking] block that lacks its [signature] — so an unsigned
-         [Reasoning] (which only ever originates from the OpenAI adapters) is
-         dropped rather than replayed. *)
+      (* Thinking blocks must come first and carry a signature; drop unsigned
+         reasoning from other providers. *)
       let thinking_blocks =
         match thinking with
         | Some (Reasoning { text; signature = Some signature }) ->
@@ -115,8 +103,7 @@ let messages_json messages =
   |> List.map (fun (role, blocks) ->
       `Assoc [ ("role", `String role); ("content", `List blocks) ])
 
-(* Anthropic requires max_tokens; this is the fallback when models.json does
-   not set maxTokens for the model. *)
+(* Anthropic requires [max_tokens]. *)
 let default_max_tokens = 4096
 
 let build_body ?(max_tokens = default_max_tokens) ~model ~tools ~messages () =
@@ -125,16 +112,12 @@ let build_body ?(max_tokens = default_max_tokens) ~model ~tools ~messages () =
     [
       ("model", `String model);
       ("max_tokens", `Int max_tokens);
-      (* Automatic prompt caching: the API caches the prefix up to the last
-         cacheable block and moves the breakpoint forward as history grows.
-         Always safe to send — sub-minimum prompts are silently not cached. *)
+      (* Automatic prefix caching; sub-minimum prompts are silently ignored. *)
       ("cache_control", `Assoc [ ("type", `String "ephemeral") ]);
       ("messages", `List (messages_json messages));
     ]
   in
   let fields =
-    (* Only advertised when there are some, matching the other adapters — the
-       field is omitted rather than sent as an empty array. *)
     match tools with
     | [] -> fields
     | _ -> fields @ [ ("tools", `List (tool_specs tools)) ]
@@ -144,8 +127,6 @@ let build_body ?(max_tokens = default_max_tokens) ~model ~tools ~messages () =
   in
   Yojson.Safe.to_string (`Assoc fields)
 
-(* First thinking / redacted_thinking block of a response. op does not send the
-   interleaved-thinking beta, so a turn carries at most one. *)
 let first_thinking blocks =
   let open Yojson.Safe.Util in
   blocks
@@ -200,9 +181,7 @@ let parse_response json_str : (Llm.assistant_turn, Transport.error) result =
           match member name u with `Int n -> n | _ -> 0
         in
         match (member "input_tokens" u, member "output_tokens" u) with
-        (* Anthropic's input_tokens already excludes both cache counts, which
-           is exactly Llm.usage's disjoint convention — no subtraction here,
-           unlike the OpenAI and Gemini adapters. *)
+        (* Anthropic's input_tokens already excludes cache counts. *)
         | `Int input, `Int output ->
             Some
               {

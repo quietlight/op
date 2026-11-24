@@ -1,5 +1,3 @@
-(* Tests for Op.Util *)
-
 let test_truncate_short () =
   Alcotest.(check string)
     "short string unchanged" "hello"
@@ -19,7 +17,6 @@ let test_truncate_long () =
 
 let test_truncate_breaks_at_newline () =
   let result = Op.Util.truncate ~max_bytes:12 "line1\nline2\nline3\nline4" in
-  (* Should break at the last newline within 12 bytes, keeping line1\nline2 *)
   Alcotest.(check bool)
     "ends with ellipsis" true
     (String.ends_with ~suffix:"..." result);
@@ -30,17 +27,12 @@ let test_truncate_empty () =
     "empty unchanged" ""
     (Op.Util.truncate ~max_bytes:5 "")
 
-(* A byte-offset cut lands mid-character on any multibyte text. "é" is 2 bytes,
-   so max_bytes:5 over "aaaaé" cuts between them; the result must drop the
-   partial character rather than emit a lone lead byte. Not every truncated
-   string reaches a request body through [to_valid_utf8] (gate summaries and
-   session previews do not), so the cut itself has to be clean. *)
+(* "é" is 2 bytes; max_bytes:5 splits it, so the partial char is dropped. *)
 let test_truncate_utf8_boundary () =
   let result = Op.Util.truncate ~max_bytes:5 "aaaaé!" in
   Alcotest.(check string) "drops the split character" "aaaa..." result
 
 let test_truncate_keeps_whole_utf8 () =
-  (* max_bytes:6 fits "aaaa" + both bytes of "é". *)
   let result = Op.Util.truncate ~max_bytes:6 "aaaaé!" in
   Alcotest.(check string) "keeps the whole character" "aaaaé..." result
 
@@ -49,9 +41,6 @@ let test_drop_partial_utf8_tail_noop () =
     "complete text unchanged" "héllo"
     (Op.Util.drop_partial_utf8_tail "héllo")
 
-(* Content wrapped in <tag>...</tag> must not be able to close its own block:
-   a context file holding a literal closing tag would otherwise have everything
-   after it read as instructions rather than data. *)
 let test_escape_closing_tag () =
   Alcotest.(check string)
     "closing tag neutralised" "before &lt;/context&gt; after"
@@ -89,7 +78,6 @@ let test_count_lines_blank_lines () =
     "internal blank lines count" 3
     (Op.Util.count_lines "a\n\nb")
 
-(* True when every byte of [s] is part of a well-formed UTF-8 sequence. *)
 let is_valid_utf8 s =
   let n = String.length s in
   let rec loop i =
@@ -101,21 +89,16 @@ let is_valid_utf8 s =
   loop 0
 
 let test_utf8_valid_unchanged () =
-  (* ASCII and well-formed multibyte input round-trip byte-for-byte. *)
   Alcotest.(check string)
     "ascii unchanged" "hello"
     (Op.Util.to_valid_utf8 "hello");
   let s = "caf\xc3\xa9 \xe2\x9c\x93 \xf0\x9f\x8c\xb2" in
-  (* é, ✓, 🌲 *)
   Alcotest.(check bool) "fixture is valid" true (is_valid_utf8 s);
   Alcotest.(check string) "multibyte unchanged" s (Op.Util.to_valid_utf8 s)
 
 let test_utf8_split_multibyte () =
-  (* A multibyte char cut mid-sequence (as byte truncation does) is repaired. *)
-  let bad =
-    "ok\xe2\x9c"
-    (* "ok" + first 2 bytes of ✓ *)
-  in
+  (* "ok" + first 2 bytes of U+2713 *)
+  let bad = "ok\xe2\x9c" in
   let r = Op.Util.to_valid_utf8 bad in
   Alcotest.(check bool) "result is valid utf-8" true (is_valid_utf8 r);
   Alcotest.(check bool)
@@ -141,8 +124,6 @@ let test_utf8_idempotent () =
 let test_utf8_empty () =
   Alcotest.(check string) "empty unchanged" "" (Op.Util.to_valid_utf8 "")
 
-(* The capped read refuses before loading: an oversized file and a device
-   (which never ends) are both errors, a small regular file reads whole. *)
 let test_read_file_capped () =
   Test_support.with_temp_dir @@ fun dir ->
   let path = Filename.concat dir "f" in

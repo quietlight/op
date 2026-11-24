@@ -1,13 +1,7 @@
-(** OpenAI Responses API adapter (/responses) with native function calling.
+(** OpenAI Responses API adapter ([/responses]).
 
-    Serializes [Tool.t list] into the flat Responses tool schema and the message
-    history into the [input] item array, and parses the [output] array back into
-    an [Llm.assistant_turn]. This is the adapter for providers that speak the
-    OpenAI Responses wire format rather than chat-completions.
-
-    Reasoning is captured for display but never replayed: parsed reasoning items
-    carry a [None] [signature], and assistant turns are serialized without their
-    [thinking]. *)
+    Sends stateless ([store:false]) requests; reasoning is parsed for display
+    only and never replayed. *)
 
 val call :
   ?max_tokens:int ->
@@ -20,14 +14,13 @@ val call :
   unit ->
   (Llm.assistant_turn, Transport.error) result
 (** [call ?max_tokens ~post ~base_url ~api_key ~model ~tools ~messages ()] posts
-    a turn to [<base_url>/responses] with native tool support and parses the
-    assistant response. [max_tokens] maps to [max_output_tokens] and is only
-    sent when provided; providers apply their own default otherwise. *)
+    a turn to [<base_url>/responses]. [max_tokens] maps to [max_output_tokens]
+    when provided. *)
 
-(** Internal hooks for serialization/parse tests. *)
+(** Internal hooks for serialization and parsing tests. *)
 module For_testing : sig
   val tool_specs : Tool.t list -> Yojson.Safe.t list
-  (** [tool_specs tools] renders [tools] as OpenAI Responses tool-spec JSON. *)
+  (** [tool_specs tools] serializes [tools] to OpenAI Responses JSON. *)
 
   val build_body :
     ?max_tokens:int ->
@@ -36,10 +29,9 @@ module For_testing : sig
     messages:Llm.message list ->
     unit ->
     string
-  (** [build_body ?max_tokens ~model ~tools ~messages ()] is the JSON request
-      body for an OpenAI Responses turn. *)
+  (** [build_body ?max_tokens ~model ~tools ~messages ()] builds the request
+      JSON body. *)
 
   val parse_response : string -> (Llm.assistant_turn, Transport.error) result
-  (** [parse_response body] parses an OpenAI Responses response body into an
-      assistant turn. *)
+  (** [parse_response body] parses an OpenAI Responses response body. *)
 end

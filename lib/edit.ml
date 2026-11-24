@@ -20,10 +20,6 @@ let pp_error = function
         n
   | No_change -> "old_string and new_string are identical; nothing to do"
 
-(* ------------------------------------------------------------------ *)
-(* Substring search / replacement helpers.                            *)
-(* ------------------------------------------------------------------ *)
-
 let from s start sub = Util.substring ~start ~needle:sub s
 
 let count_occurrences ~sub s =
@@ -56,8 +52,7 @@ let replace_all_sub ~sub ~by s =
   loop 0;
   Buffer.contents buf
 
-(* Edit holds the whole file in memory (twice, while replacing), so it refuses
-   anything past a size no hand-edited text file reaches. *)
+(* Cap in-memory file size (edit holds both original and updated copies). *)
 let max_file_bytes = 16 * 1024 * 1024
 
 let read_file path =

@@ -1,11 +1,5 @@
 open Op
 
-(* Pure-JSON renderer tests for the prompt-run `op --json` result object. The
-   renderers in Run_report take data values and return one compact JSON line;
-   bin/main.ml only adds session-field assembly, stderr diagnostics, and exit codes.
-   So we build fixtures directly and assert the serialised string — the same
-   in-process style as expect_list_json.ml. *)
-
 let session_fields = [ ("sessionId", `String "s1"); ("parentId", `String "e2") ]
 
 let metadata =
@@ -18,8 +12,6 @@ let metadata =
 
 let show_stop = function Some s -> s | None -> "none"
 
-(* Build an assistant turn carrying [usage] (or none). Only the usage matters
-   for sum_usage, so text/thinking/tool_calls are empty. *)
 let assistant ?usage () =
   Llm.Assistant { text = ""; thinking = None; tool_calls = []; usage }
 
@@ -33,11 +25,9 @@ let show_usage = function
         u.cache_read u.cache_creation
 
 let%expect_test "tokens_line: cache counts shown only when nonzero" =
-  (* A non-caching provider: terse, no cache suffix. *)
   print_endline
     (Run_report.tokens_line
        (usage ~input:200 ~output:80 ~cache_read:0 ~cache_creation:0));
-  (* A cached Anthropic run: the prompt volume is in the cache counts. *)
   print_endline
     (Run_report.tokens_line
        (usage ~input:3 ~output:50 ~cache_read:1259 ~cache_creation:128));
@@ -57,8 +47,6 @@ let%expect_test "sum_usage: no usage-bearing turns is None" =
     none
     |}]
 
-(* The cache fields must be summed alongside input/output — the original bug was
-   that they were dropped, so a parent saw ~1% of the real prompt volume. *)
 let%expect_test "sum_usage: totals all four fields across turns" =
   let history =
     [
@@ -66,7 +54,6 @@ let%expect_test "sum_usage: totals all four fields across turns" =
         ~usage:(usage ~input:3 ~output:50 ~cache_read:1000 ~cache_creation:128)
         ();
       Llm.user "more";
-      (* a turn that reported no usage must not reset the running total *)
       assistant ();
       assistant
         ~usage:(usage ~input:5 ~output:20 ~cache_read:259 ~cache_creation:0)
@@ -106,8 +93,6 @@ let%expect_test "classify: context_limit" =
     (show_stop c.stop_reason);
   [%expect {| is_error=true exit_code=1 stop_reason=context_limit |}]
 
-(* Context occupancy is the *last* turn's usage, not the lifetime total: the
-   window holds one prompt, however many turns preceded it. *)
 let%expect_test "context_usage: last usage-bearing turn wins" =
   let history =
     [
@@ -118,7 +103,6 @@ let%expect_test "context_usage: last usage-bearing turn wins" =
       assistant
         ~usage:(usage ~input:80 ~output:20 ~cache_read:900 ~cache_creation:0)
         ();
-      (* a later turn with no usage must not erase the reading *)
       assistant ();
     ]
   in
@@ -145,7 +129,6 @@ let%expect_test "context_fields: needs both a window and a reading" =
   in
   let show fields = print_endline (Yojson.Safe.to_string (`Assoc fields)) in
   show (Run_report.context_fields ~window:(Some 10000) history);
-  (* No contextWindow in models.json, or no turn reported usage: no object. *)
   show (Run_report.context_fields ~window:None history);
   show (Run_report.context_fields ~window:(Some 10000) [ assistant () ]);
   [%expect
@@ -155,8 +138,6 @@ let%expect_test "context_fields: needs both a window and a reading" =
     {}
     |}]
 
-(* A resumed run replays turns that now carry the usage the session recorded;
-   without [base] those would be counted a second time. *)
 let%expect_test "sum_usage: base skips the replayed prefix" =
   let replayed =
     assistant
@@ -209,9 +190,6 @@ let%expect_test "classify invariant: exit_code=0 iff not is_error" =
     exit_code=1 is_error=true invariant=true
     |}]
 
-(* A cached Anthropic prompt: [input] is tiny while the real prompt volume
-   lands in [cacheRead]. Both cache fields ride in the tokens object so a parent
-   can budget on the true volume rather than the ~1% it would see from input. *)
 let%expect_test "result: finished surfaces cache tokens" =
   print_endline
     (Run_report.result ~answer:"done" ~session_fields ~model:"anthropic/claude"
@@ -234,8 +212,6 @@ let%expect_test "result: branch correction metadata is additive" =
   [%expect
     {| {"answer":"done","sessionId":"s1","parentId":"e2","model":"anthropic/claude","tokens":{"input":3,"output":50,"cacheRead":0,"cacheWrite":0},"branchCorrectedFrom":"a1","branchCorrectedTo":"u1","turns":3,"toolCalls":2,"toolErrors":0,"tools":["bash"],"stopReason":"finished","isError":false} |}]
 
-(* A provider that does not report caching: the cache fields are present but
-   zero, so the tokens schema is stable across providers. *)
 let%expect_test "result: max_steps keeps the partial answer, cache fields zero"
     =
   print_endline
@@ -264,9 +240,6 @@ let%expect_test "error: bare (early failure, no session or model)" =
   print_endline (Run_report.error ~msg:"no default model" ());
   [%expect {| {"error":"no default model","isError":true} |}]
 
-(* --stream shares stdout with the session-entry lines, so its tail envelope
-   carries a [type] discriminator; everything else is the --json object
-   unchanged, keeping the two contracts one shape. *)
 let%expect_test "result: typed for --stream" =
   print_endline
     (Run_report.result ~typed:true ~answer:"done" ~session_fields

@@ -1,12 +1,3 @@
-(* Reading and summarising pi-compatible session logs. The writer half lives in
-   session.ml; this module only parses existing files back into messages,
-   branch-point resolutions, and listing summaries.
-
-   Every reader starts from one [parse_entries] pass (read + line-split +
-   per-line JSON parse), so resolving a resume no longer re-reads the same file
-   several times. Derived views (tree entries, ids, leaves, summaries) are pure
-   functions over that parsed list. *)
-
 module U = Yojson.Safe.Util
 
 let ( let* ) = Result.bind
@@ -31,10 +22,6 @@ let err_parent_cycle () =
     "parentId chain forms a cycle (corrupt session file); no path to the root \
      exists"
 
-(* The single read+parse pass every other reader is built on. Parses each
-   non-empty line as JSON in file order, including the session header as the
-   first entry; views that want only tree entries drop it by type. Errors on an
-   unreadable file or a malformed JSON line. *)
 let parse_entries path =
   let* content = Util.read_file path in
   String.split_on_char '\n' content
@@ -50,9 +37,7 @@ let parse_entries path =
 
 let is_header e = U.member "type" e = `String "session"
 
-(* A parsed session file. [entries] are the tree entries in file order: the
-   header is held apart because it carries an id (the session id, not a valid
-   parentId target) and no parent link. [by_id] follows parentId links in O(1). *)
+(* Keep header separate: its id is the session UUID, not a parentId target. *)
 type tree = {
   header : Yojson.Safe.t option;
   entries : Yojson.Safe.t list;
@@ -75,8 +60,6 @@ let header t = t.header
 let entries t = t.entries
 let entry t id = Hashtbl.find_opt t.by_id id
 
-(* Concatenate the "text" fields of content blocks of type "text". pi also
-   allows user content to be a plain string. Image blocks contribute no text. *)
 let text_of_content = function
   | `String s -> s
   | content ->
@@ -87,10 +70,6 @@ let text_of_content = function
           | _ -> None)
       |> String.concat ""
 
-(* Parse a pi content list into neutral [content_block]s, preserving order.
-   A plain-string content becomes a single [Text]. Image blocks carry the pi
-   [mimeType]/[data] pair (docs/pi-session-format.md); round-tripping them is a
-   correctness requirement so a resumed session replays the same history. *)
 let content_blocks_of = function
   | `String s -> [ Llm.Text s ]
   | content ->
@@ -111,10 +90,7 @@ let content_blocks_of = function
               Some (Llm.Image { media_type; data })
           | _ -> None)
 
-(* Split parsed blocks into (text-body, attachment-blocks): a leading run of
-   text blocks is joined into the [User.text] body, the rest (images, and any
-   text after an image) stay as [blocks]. Mirrors how the adapters emit a text
-   body followed by attachments. *)
+(* Leading text blocks become [User.text]; remaining blocks preserve order. *)
 let is_text = function Llm.Text _ -> true | _ -> false
 
 let user_of_content content =
@@ -132,10 +108,8 @@ let user_of_content content =
   in
   Llm.User { text; blocks = attachments }
 
-(* Read an assistant message's [usage] back. op's writer always emits the
-   object, zeroed when the provider reported nothing, so an all-zero reading is
-   "no usage" rather than "a free turn" — reporting it as [None] keeps the
-   context gauge from showing a spurious 0 for a resumed branch. *)
+(* Treat an all-zero usage object (emitted when provider reported none) as
+   [None] so the context gauge does not show a spurious 0 on resume. *)
 let usage_of_json json =
   let field name = match U.member name json with `Int n -> n | _ -> 0 in
   let input = field "input"
@@ -145,8 +119,6 @@ let usage_of_json json =
   if input = 0 && output = 0 && cache_read = 0 && cache_creation = 0 then None
   else Some { Llm.input; output; cache_read; cache_creation }
 
-(* The first thinking block of an assistant turn's content, if any. Anthropic
-   replays these verbatim, so the signature must survive the round trip. *)
 let thinking_of_content content =
   U.to_list content
   |> List.find_map (fun block ->
@@ -165,7 +137,6 @@ let thinking_of_content content =
               Some (Llm.Reasoning { text; signature }))
       | _ -> None)
 
-(* Turn a pi message object into an Llm.message; None for roles op ignores. *)
 let message_of_json msg =
   match U.member "role" msg with
   | `String "user" -> Ok (Some (user_of_content (U.member "content" msg)))
@@ -205,8 +176,6 @@ let message_of_json msg =
                 name = U.to_string (U.member "toolName" msg);
                 content = text_of_content (U.member "content" msg);
                 is_error = U.to_bool (U.member "isError" msg);
-                (* Read tool-specific metadata back verbatim for pi-format
-                   parity and compatibility with foreign and historical logs. *)
                 details =
                   (match U.member "details" msg with
                   | `Null -> None
@@ -214,8 +183,6 @@ let message_of_json msg =
               }))
   | _ -> Ok None
 
-(* An entry produces a message only when its type is "message"; every other
-   entry type (model_change, thinking_level_change, ...) is skipped. *)
 let entry_message entry =
   match U.member "type" entry with
   | `String "message" -> (
@@ -223,11 +190,7 @@ let entry_message entry =
       with U.Type_error (msg, _) -> err_malformed_message msg)
   | _ -> Ok None
 
-(* Walk parentId links from the start entry to the root. [fuel] bounds the walk
-   so a corrupt parent cycle (a.parentId = b, b.parentId = a — hand-edited or
-   truncated jsonl) cannot spin forever accumulating messages; the caller seeds
-   it with the entry count, which no acyclic chain can exceed. Same guard
-   {!describe_tip} already carries. *)
+(* Walk [parentId] links to the root; [fuel] breaks cycles in corrupt files. *)
 let rec walk_parents by_id ~fuel entry acc =
   if fuel <= 0 then err_parent_cycle ()
   else
@@ -269,8 +232,6 @@ let is_incomplete_branch_point entry =
   | _ -> false
 
 let resolve_branch_point t ~leaf =
-  (* Same cycle bound as {!walk_parents}: this walk also follows parentId and
-     would spin on a corrupt chain. *)
   let rec walk ~fuel id =
     if fuel <= 0 then err_parent_cycle ()
     else
@@ -287,10 +248,6 @@ let resolve_branch_point t ~leaf =
   in
   walk ~fuel:(List.length t.entries) leaf
 
-(* --- resuming ------------------------------------------------------------ *)
-
-(* Every tree-entry id, so the writer can check a requested leaf exists and
-   seed its id-uniqueness set on resume. *)
 let entry_ids t =
   List.filter_map
     (fun e -> match U.member "id" e with `String id -> Some id | _ -> None)
@@ -309,10 +266,6 @@ let file_for_session ~dir ~session_id =
   | f :: _ -> Ok (Filename.concat dir f)
   | [] -> err_session_not_found ~session_id ~dir
 
-(* The leaf entries of the tree: entries that are no other entry's parent. A
-   linear session has exactly one leaf (its tail); a forked session has one per
-   branch tip, so continuing without a --parentId is ambiguous. Returned in
-   file (write) order. *)
 let leaf_ids t =
   let parents = Hashtbl.create 64 in
   List.iter

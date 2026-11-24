@@ -117,8 +117,6 @@ let test_load_all_fails_fast () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected the missing file to fail the batch"
 
-(* --image is repeatable, so the per-image cap bounds nothing on its own: the
-   run as a whole is capped by image count too. *)
 let test_load_all_image_count_cap () =
   with_temp_dir @@ fun dir ->
   let mk i =
@@ -191,8 +189,6 @@ let test_openai_image_url () =
     (member "image_url" img |> member "url" |> to_string)
 
 let test_openai_text_only_is_bare_string () =
-  (* A text-only user message must serialize byte-identically to before: a bare
-     string, not a part list. *)
   let body =
     Op.Openai_adapter.For_testing.build_body ~model:"m" ~tools:[]
       ~messages:[ Op.Llm.user "plain" ]

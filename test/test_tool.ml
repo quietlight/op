@@ -1,5 +1,3 @@
-(* Tests for Op.Tool parameter helpers and pp *)
-
 let test_required_string_ok () =
   let json = `Assoc [ ("path", `String "foo.ml") ] in
   match Op.Tool.required_string json "path" with

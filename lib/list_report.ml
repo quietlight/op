@@ -1,13 +1,3 @@
-(** Pure JSON renderers for [op --list --json].
-
-    Each function returns a single compact JSON line for stdout. Empty results
-    are a success with an empty array — never an error; the caller signals
-    failures with {!error}. [bin/main.ml] owns data fetching, the human-readable
-    text path, stderr diagnostics, and exit codes, so these renderers stay free
-    of side effects and are unit-testable. *)
-
-(* Compact, single-line JSON — the same serialisation [Run_report]
-   uses for the prompt-run result object. *)
 let to_line json = Yojson.Safe.to_string json
 
 let error ?hint msg =

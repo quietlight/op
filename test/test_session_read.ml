@@ -1,10 +1,5 @@
 open Test_support
 
-(* Reader tests for Op.Session_read. Sessions are built with the Op.Session
-   writer, then read back and summarised through Op.Session_read. *)
-
-(* The readers work on a tree parsed once; these tests mostly ask one question
-   of one file, so load-then-ask is wrapped up here. *)
 let read_messages ~path ?leaf () =
   Result.bind (Op.Session_read.load path) (fun t ->
       Op.Session_read.messages t ?leaf ())
@@ -25,7 +20,6 @@ let turn ?(text = "") ?(thinking = None) ?(usage = None) tool_calls :
 let tool_call ?(args = `Assoc []) ~id ~name () : Op.Llm.tool_call =
   { id; name; arguments = args }
 
-(* Naive substring check, enough for asserting on error messages. *)
 let contains haystack needle =
   let hn = String.length haystack and nn = String.length needle in
   let rec at i =
@@ -42,8 +36,6 @@ let read_jsonl path =
 let member = Yojson.Safe.Util.member
 let str field json = Yojson.Safe.Util.(member field json |> to_string)
 
-(* A populated session: user prompt, assistant turn with a tool call, the
-   tool result, and a final assistant answer. *)
 let write_sample_session dir =
   let session =
     match
@@ -213,7 +205,6 @@ let test_session_thinking_empty_sig () =
        []);
   let path = Op.Session.path session in
   Op.Session.close session;
-  (* Verify the file does NOT contain thinkingSignature *)
   let file_contents = In_channel.with_open_text path In_channel.input_all in
   Alcotest.(check bool)
     "no thinkingSignature key" true
@@ -256,7 +247,6 @@ let test_session_thinking_redacted () =
 let test_session_load_leaf () =
   with_temp_dir @@ fun dir ->
   let path = write_sample_session dir in
-  (* The user prompt is the first message entry; use its id as the leaf. *)
   let user_entry =
     read_jsonl path |> List.find (fun e -> member "type" e = `String "message")
   in
@@ -274,12 +264,8 @@ let test_session_load_unknown_leaf () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected an error for an unknown leaf id"
 
-(* A hand-edited or truncated jsonl can hold a parentId cycle (a -> b -> a).
-   Both parentId walks are fuel-bounded, so the reader must error rather than
-   spin forever accumulating messages. Written as raw jsonl because the writer
-   cannot produce a cycle.
-   The entries are assistant turns carrying a tool call, which is what
-   [resolve_branch_point] walks through, so one fixture exercises both walks. *)
+(* Raw JSONL parentId cycle (a -> b -> a) with tool-call entries so both
+   [messages] and [resolve_branch_point] walk it. *)
 let write_cyclic_session dir =
   let path = Filename.concat dir "cycle.jsonl" in
   let msg id parent call =
@@ -380,10 +366,6 @@ let test_resolve_branch_point_walks_to_tool_result () =
         first_tool_result_id id;
       Alcotest.(check bool) "second tool-use assistant adjusted" true adjusted
 
-(* Fork mid tool call: a session is interrupted after an assistant turn with
-   tool calls, before tool results are written. The leaf is the assistant
-   turn; resolve_branch_point should walk up to the user entry. This is the
-   "mid tool call" fork path exercised by complete_resume_leaf. *)
 let test_resolve_branch_point_interrupted_mid_call () =
   with_temp_dir @@ fun dir ->
   let session =
@@ -405,16 +387,12 @@ let test_resolve_branch_point_interrupted_mid_call () =
            ();
        ]);
   let tool_use_id = Option.get (Op.Session.leaf session) in
-  (* Intentionally do NOT append tool results — the session is "interrupted". *)
   let path = Op.Session.path session in
   Op.Session.close session;
-  (* resolve_branch_point on the tool-use entry walks up to the user entry. *)
   (match resolve_branch_point path tool_use_id with
   | id, adjusted ->
       Alcotest.(check string) "interrupted tool-use walks to user" user_id id;
       Alcotest.(check bool) "interrupted tool-use adjusted" true adjusted);
-  (* load_messages from the tool-use entry still returns [User; Assistant]
-     because it just walks parentIds without resolve_branch_point logic. *)
   (match load_messages path ~leaf:tool_use_id () with
   | [ Op.Llm.User { text = u; _ }; Op.Llm.Assistant a ] ->
       Alcotest.(check string) "mid-call user text" "do the thing" u;
@@ -422,8 +400,6 @@ let test_resolve_branch_point_interrupted_mid_call () =
       Alcotest.(check int)
         "mid-call tool calls preserved" 1 (List.length a.tool_calls)
   | ms -> Alcotest.failf "expected [User; Assistant], got %d" (List.length ms));
-  (* Now simulate the actual resume path: fork from the resolved branch point
-     (the user entry). The new branch should contain only the user prompt. *)
   let forked =
     match Op.Session.resume ~path ~leaf:user_id () with
     | Ok s -> s
@@ -434,15 +410,12 @@ let test_resolve_branch_point_interrupted_mid_call () =
     (turn ~text:"retry answer" []);
   let new_id = Option.get (Op.Session.leaf forked) in
   Op.Session.close forked;
-  (* The new branch's history is exactly [User; Assistant]. *)
   (match load_messages path ~leaf:new_id () with
   | [ Op.Llm.User { text = u; _ }; Op.Llm.Assistant a ] ->
       Alcotest.(check string) "forked mid-call user text" "do the thing" u;
       Alcotest.(check string)
         "forked mid-call assistant text" "retry answer" a.text
   | ms -> Alcotest.failf "expected [User; Assistant], got %d" (List.length ms));
-  (* The user entry now has two children: the original (interrupted) assistant
-     and the new forked one. *)
   let entries =
     read_jsonl path
     |> List.filter (fun e -> member "type" e = `String "message")
@@ -452,8 +425,6 @@ let test_resolve_branch_point_interrupted_mid_call () =
   in
   Alcotest.(check int)
     "user entry has two children after mid-call fork" 2 (List.length children);
-  (* The session now has 2 leaves (the original interrupted assistant and the
-     new forked assistant). *)
   Alcotest.(check int)
     "two leaves after mid-call fork" 2
     (List.length (leaf_ids ~path))
@@ -461,7 +432,6 @@ let test_resolve_branch_point_interrupted_mid_call () =
 let test_session_resume_and_fork () =
   with_temp_dir @@ fun dir ->
   let path = write_sample_session dir in
-  (* The user prompt is the first message entry; resume with it as the leaf. *)
   let user_id =
     str "id"
       (read_jsonl path
@@ -483,16 +453,13 @@ let test_session_resume_and_fork () =
     read_jsonl path
     |> List.filter (fun e -> member "type" e = `String "message")
   in
-  (* The new assistant entry is a child of the user entry. *)
   let new_entry = List.find (fun e -> str "id" e = new_id) entries in
   Alcotest.(check string)
     "new entry parentId" user_id (str "parentId" new_entry);
-  (* The user entry now has two children: the original assistant and the new. *)
   let children =
     List.filter (fun e -> member "parentId" e = `String user_id) entries
   in
   Alcotest.(check int) "user entry has two children" 2 (List.length children);
-  (* The new branch's history is exactly [User; Assistant]. *)
   match load_messages path ~leaf:new_id () with
   | [ Op.Llm.User { text = u; _ }; Op.Llm.Assistant a ] ->
       Alcotest.(check string) "forked user text" "do the thing" u;
@@ -519,7 +486,6 @@ let test_file_for_session () =
 let test_leaf_ids () =
   with_temp_dir @@ fun dir ->
   let path = write_sample_session dir in
-  (* A linear session has exactly one leaf: its last tree entry. *)
   (match leaf_ids ~path with
   | [ id ] ->
       let entries =
@@ -529,7 +495,6 @@ let test_leaf_ids () =
       let expected_last = str "id" (List.hd (List.rev entries)) in
       Alcotest.(check string) "sole leaf is the tail" expected_last id
   | ids -> Alcotest.failf "expected one leaf, got %d" (List.length ids));
-  (* Fork at the user entry: a second assistant child makes two branch tips. *)
   let user_id =
     str "id"
       (read_jsonl path
@@ -557,18 +522,14 @@ let test_list_sessions () =
     | Error e -> Alcotest.fail e
   in
   Alcotest.(check int) "two sessions" 2 (List.length sessions);
-  (* Ascending order by filename = chronological *)
   let ids = List.map (fun (s : Op.Session_list.summary) -> s.id) sessions in
   Alcotest.(check bool) "ascending ids" true (ids = List.sort compare ids);
-  (* Summary is first sentence of first user message *)
   (match sessions with
   | [ s1; s2 ] ->
       Alcotest.(check string) "summary1" "do the thing" s1.summary;
       Alcotest.(check string) "summary2" "do the thing" s2.summary;
-      (* user + assistant + toolResult + assistant = 4 message entries *)
       Alcotest.(check int) "count1" 4 s1.count
   | _ -> Alcotest.fail "expected exactly two sessions");
-  (* the lib returns every session, oldest first; the caller applies --limit *)
   match Op.Session_list.list_sessions ~dir () with
   | Ok (_ :: _ as l) ->
       Alcotest.(check int) "all sessions returned" 2 (List.length l)
@@ -583,7 +544,6 @@ let test_list_entries () =
     | Ok e -> e
     | Error e -> Alcotest.fail e
   in
-  (* Only user/assistant, no toolResult *)
   Alcotest.(check int) "user+assistant only" 3 (List.length entries);
   let roles =
     List.map (fun (e : Op.Session_list.entry_summary) -> e.role) entries
@@ -592,28 +552,23 @@ let test_list_entries () =
     "roles"
     [ "user"; "assistant"; "assistant" ]
     roles;
-  (* Preview is populated *)
   (match entries with
   | [ u; a1; a2 ] ->
       Alcotest.(check string) "user preview" "do the thing" u.preview;
       Alcotest.(check string) "first assistant" "on it" a1.preview;
       Alcotest.(check string) "second assistant" "done" a2.preview
   | _ -> Alcotest.fail "expected 3 entries");
-  (* parent_id chain: each entry's parent is the immediately preceding entry *)
   (match entries with
   | [ u; a1; a2 ] ->
-      (* user parent is not null because model_change + thinking_level_change precede it *)
       Alcotest.(check bool)
         "user parent is some" true
         (Option.is_some u.parent_id);
       Alcotest.(check (option string)) "a1 parent" (Some u.id) a1.parent_id;
-      (* a2 parent is the toolResult entry, not a1, so just check it's some entry *)
       Alcotest.(check bool)
         "a2 parent is some" true
         (Option.is_some a2.parent_id);
       Alcotest.(check bool) "a2 parent not a1" true (a2.parent_id <> Some a1.id)
   | _ -> Alcotest.fail "expected 3 entries");
-  (* the lib returns every user/assistant entry; the caller applies --limit *)
   match Op.Session_list.list_entries ~path () with
   | Ok [ _; e1; e2 ] ->
       Alcotest.(check string) "second-last role" "assistant" e1.role;
@@ -621,8 +576,6 @@ let test_list_entries () =
   | Ok l -> Alcotest.failf "expected 3 entries, got %d" (List.length l)
   | Error e -> Alcotest.fail e
 
-(* A tool-only assistant turn previews its tool calls, and an entry with two
-   children is flagged as a fork point. *)
 let test_tool_preview_and_fork () =
   with_temp_dir @@ fun dir ->
   let session =
@@ -641,7 +594,6 @@ let test_tool_preview_and_fork () =
        ]);
   let path = Op.Session.path session in
   Op.Session.close session;
-  (* Branch from the user entry: a second assistant child makes it a fork. *)
   let forked =
     match Op.Session.resume ~path ~leaf:user_id () with
     | Ok s -> s
@@ -673,9 +625,6 @@ let test_tool_preview_and_fork () =
   in
   Alcotest.(check bool) "user entry is a fork" true user_entry.is_fork
 
-(* An image attachment on a user turn survives a write/read round trip:
-   session_read must rebuild the Image block rather than silently drop it, or a
-   resumed session would replay a different history. *)
 let test_session_image_round_trip () =
   with_temp_dir @@ fun dir ->
   let session =
@@ -696,7 +645,6 @@ let test_session_image_round_trip () =
       Alcotest.(check string) "data" "QUJD" data
   | _ -> Alcotest.fail "expected a single User with one Image block"
 
-(* The messages listing elides image data to a placeholder, never base64. *)
 let test_session_image_preview_elides () =
   with_temp_dir @@ fun dir ->
   let session =
@@ -718,10 +666,6 @@ let test_session_image_preview_elides () =
       Alcotest.(check bool) "no base64" false (contains e.preview "QUJD")
   | _ -> Alcotest.fail "expected one entry"
 
-(* The case the listing exists for: a branch whose tip is a tool result (what a
-   run killed mid-turn leaves behind). [list_entries] drops tool results, so
-   that tip is invisible there and must be named here, described by the
-   assistant turn above it. *)
 let test_list_branches () =
   with_temp_dir @@ fun dir ->
   let session =
@@ -778,9 +722,6 @@ let test_list_branches () =
         (List.map (fun (t : Op.Session_list.branch_tip) -> t.preview) tips)
   | Error e -> Alcotest.fail e
 
-(* --context boilerplate must not be what a listing shows: a project that always
-   injects the same CLAUDE.md would otherwise give every session and every
-   opening message the same summary. *)
 let test_context_stripped_from_listings () =
   with_temp_dir @@ fun dir ->
   let session =
@@ -794,7 +735,6 @@ let test_context_stripped_from_listings () =
       ~prompt:"audit the wav parser"
   in
   Op.Session.append_user session () ~text:prompt;
-  (* A second context file, to check the loop rather than a single block. *)
   Op.Session.append_assistant session ~api:"a" ~provider:"a" ~model:"m"
     (turn ~text:"on it" []);
   Op.Session.append_user session ()
@@ -817,8 +757,6 @@ let test_context_stripped_from_listings () =
         "two blocks stripped" "and now the tests" second.preview
   | _ -> Alcotest.fail "expected three entries"
 
-(* The history op replays must keep every context block: stripping is a
-   presentation choice for listings, not a rewrite of the conversation. *)
 let test_context_kept_in_history () =
   with_temp_dir @@ fun dir ->
   let session =

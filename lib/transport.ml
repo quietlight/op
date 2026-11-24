@@ -1,6 +1,3 @@
-(* HTTPS transport and shared JSON parsing helpers for provider adapters.
-   See transport.mli. *)
-
 type error =
   | Json_error of string
   | Api_error of string
@@ -34,7 +31,6 @@ type post_fn =
   body:string ->
   (string, error) result
 
-(* [member field json] as a list, preserving missing and malformed shapes. *)
 let list_field field json =
   let open Yojson.Safe.Util in
   match member field json with
@@ -42,7 +38,6 @@ let list_field field json =
   | `List values -> Ok values
   | _ -> Error (Invalid_response_field (field, json))
 
-(* Surface a top-level { "error": ... } from a provider response. *)
 let check_error json =
   let open Yojson.Safe.Util in
   match json |> member "error" with
@@ -94,17 +89,11 @@ let https_wrapper tls_config uri flow =
 
 let request_timeout = 300.0
 
-(* A sandbox like srt gives the child no direct network: egress must go through
-   an HTTP proxy named by the standard *_PROXY env vars, and DNS is only
-   available proxy-side. cohttp-eio routes through a proxy via a global config,
-   so we translate the environment into one [set_proxies] call. A proxy URL that
-   carries userinfo (srt embeds a per-run [srt:<token>] credential) becomes a
-   Proxy-Authorization header, since cohttp-eio does not derive one from the URL
-   itself. No *_PROXY vars set → nothing configured → identical to a direct
-   connection, so this is inert outside a sandbox. Idempotent across domains. *)
+(* Translate *_PROXY env vars into a one-time cohttp-eio global proxy config
+   (e.g. for sandboxes like srt with proxy-only egress). Proxy URL userinfo is
+   lifted into Proxy-Authorization since cohttp-eio does not derive it. *)
 let proxies_configured = Atomic.make false
 
-(* First non-empty value among the env var [names] (each tried in order). *)
 let proxy_env names =
   List.find_map
     (fun n ->
@@ -113,8 +102,6 @@ let proxy_env names =
       | _ -> None)
     names
 
-(* Every proxy URL srt emits carries the same credential; lift the first one we
-   find into a shared Proxy-Authorization header. *)
 let proxy_auth_header uris =
   List.find_map
     (fun u ->
@@ -133,11 +120,8 @@ let proxy_auth_header uris =
                (Cohttp.Auth.string_of_credential (`Basic (user, pass)))))
     uris
 
-(* cohttp-eio speaks HTTP CONNECT, so only http/https proxy URLs mean anything;
-   a socks5:// or file:// value would otherwise be handed over and fail deep in
-   the client with an opaque error. Warn and ignore instead — an unusable proxy
-   should not silently become a direct connection *without* the user hearing
-   about it, since the whole point of *_PROXY under srt is egress control. *)
+(* cohttp-eio only supports HTTP CONNECT proxies; warn on unsupported schemes
+   rather than silently bypassing egress control. *)
 let validate_proxy_scheme name u =
   match Uri.scheme u with
   | Some ("http" | "https") -> Some u
@@ -160,10 +144,8 @@ let configure_proxies () =
     let proxy_headers =
       proxy_auth_header [ https_proxy; http_proxy; all_proxy ]
     in
-    (* cohttp connects by host:port, so drop the userinfo we just consumed. A
-       proxy on [localhost] must resolve to IPv4: srt binds its proxy on
-       127.0.0.1, but macOS resolves [localhost] to ::1 first and cohttp-eio
-       does not fall back, so pin the loopback name to 127.0.0.1. *)
+    (* Drop consumed userinfo and pin [localhost] to 127.0.0.1: srt binds IPv4,
+       and macOS resolves [localhost] to ::1 first without cohttp fallback. *)
     let pin_loopback u =
       match Uri.host u with
       | Some "localhost" -> Uri.with_host u (Some "127.0.0.1")
@@ -183,18 +165,11 @@ let configure_proxies () =
         ?proxy_headers ~scheme_proxies ()
   end
 
-(* A provider body is read into memory whole, so an unbounded read lets a
-   malfunctioning provider — or anything terminating the TLS session, a proxy
-   included — exhaust it. The success cap is generous: a long completion with
-   large usage/tool payloads is legitimately some megabytes. Error bodies are
-   held to far less, since they are short by construction and get printed and
-   propagated into results, where a huge one is its own problem. *)
+(* Cap response reads to prevent OOM from unbounded bodies. *)
 let max_response_bytes = 32 * 1024 * 1024
 let max_error_body_bytes = 256 * 1024
 
-(* One byte of headroom over [limit] so a body of exactly [limit] bytes still
-   reaches EOF inside the buffer; anything longer either overshoots the limit by
-   that byte or trips the buffer, and both are the same refusal. *)
+(* Allow 1 byte of headroom so an exact-[limit] body reaches EOF cleanly. *)
 let read_body ~limit flow =
   let buf = Eio.Buf_read.of_flow ~max_size:(limit + 1) flow in
   match Eio.Buf_read.take_all buf with
@@ -202,8 +177,7 @@ let read_body ~limit flow =
   | s -> Ok s
   | exception Eio.Buf_read.Buffer_limit_exceeded -> Error limit
 
-(* One request. The second component is the parsed Retry-After header (seconds)
-   when the server sent one alongside an error status. *)
+(* Single attempt; returns optional numeric Retry-After seconds on error. *)
 let post_once ~tls_config ~net ~clock ~url ~headers ~body :
     (string, error) result * float option =
   try
@@ -262,21 +236,15 @@ let post_once ~tls_config ~net ~clock ~url ~headers ~body :
 let max_attempts = 3
 let max_delay = 30.0
 
-(* Rate limits and server-side failures are worth retrying; client errors
-   (4xx other than 429) and transport/TLS problems are not. *)
 let retryable = function
   | Http_error (429, _) -> true
   | Http_error (status, _) -> status >= 500
   | _ -> false
 
-(* Exponential backoff (1s, 2s, 4s, ...) starting from attempt [n] = 0; a
-   server-provided Retry-After hint wins. Either way the delay is capped. *)
 let retry_delay ~hint n =
   let backoff = Float.pow 2.0 (float_of_int n) in
   Float.min max_delay (Option.value hint ~default:backoff)
 
-(* Run [f] up to [max_attempts] times, sleeping between retryable failures.
-   Parameterized over [sleep] so tests can drive it without a clock. *)
 let with_retries ~sleep ~max_attempts f =
   let rec attempt n =
     match f () with

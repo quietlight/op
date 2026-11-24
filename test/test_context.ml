@@ -1,5 +1,3 @@
-(* Tests for Op.Context — pure rendering of --context file blocks. *)
-
 let render = Op.Context.render
 
 let test_no_files_is_identity () =

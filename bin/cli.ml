@@ -3,12 +3,7 @@ open Cmdliner
 type set_kind = Set_default
 type list_kind = Sessions | Messages | Branches | Models | Default
 
-(* How a prompt run reports itself on stdout. [Human] (the default) is the
-   rendered transcript — what you want when you run op yourself. The machine
-   views are opt-in: [Stream] is the session's ndjson lines as they happen, then
-   the result envelope tagged with "type":"result" (what hop reads); [Json] is
-   the single result envelope alone. Warnings and diagnostics go to stderr in
-   every mode. *)
+(* Stdout mode for a prompt run; warnings always go to stderr. *)
 type output = Json | Stream | Human
 
 type opts = {
@@ -62,11 +57,8 @@ let prompt_arg =
 
 let session_docs = "SESSION OPTIONS"
 
-(* Flag naming is intentionally mixed: [--sessionId]/[--parentId] are camelCase
-   to match pi's flag names (op resumes pi-format sessions, so keeping the names
-   identical lets the two share muscle memory and copy-pasted commands). The
-   newer op-only flags ([--max-steps], [--set], [--list]) use conventional
-   kebab-case. Do not "fix" the camelCase pair — it is pinned to pi. *)
+(* --sessionId/--parentId stay camelCase for compatibility with pi; op-only
+   flags use kebab-case. *)
 let session_id_arg =
   let doc =
     "The session $(i,ID) to act on. When running a prompt, resume that \
@@ -192,7 +184,7 @@ let prompt_file_arg =
 let max_steps_arg =
   let doc =
     "Cap the agent at $(i,N) steps, where a step is one assistant turn that \
-     runs tool calls (default 75). A turn that answers with no tools finishes \
+     runs tool calls (default 150). A turn that answers with no tools finishes \
      within budget and never consumes a step, so a text-only reply always \
      completes; hitting the cap on a tool-using run exits 1, as the run is not \
      complete. $(i,N) must be positive."
@@ -202,10 +194,8 @@ let max_steps_arg =
 
 let err_msg fmt = Fmt.kstr (fun s -> Error (`Msg s)) fmt
 
-(* Parse a comma-separated [--tools] list, validating each name against
-   {!Op.Tools.known}. The literal [none] is the empty set — a tool-less chat
-   run. A bare empty list or an unknown name is a cmdliner error (exit 124),
-   so the mistake is caught before any run starts. *)
+(* Comma-separated --tools list validated against {!Op.Tools.known}; "none"
+   yields []. *)
 let tools_conv =
   let parse s =
     if String.trim s = "none" then Ok []
@@ -311,17 +301,10 @@ let stream_arg =
   in
   Arg.(value & flag & info [ "stream" ] ~doc)
 
-(* The prompt run's output mode: the human transcript unless a flag asked for
-   one of the machine views. *)
 let output opts =
   if opts.json then Json else if opts.stream then Stream else Human
 
-(* What one invocation does. The flags are flat because their spellings are
-   pinned (to pi, and to hop), but [--set], [--list] and [--handoff] are really
-   separate commands, and each reads only some of the flags. Parsing lands
-   here, so the dispatcher matches on a command that carries exactly what it
-   needs instead of consulting an options record for combinations that cannot
-   occur. *)
+(* Dispatch target parsed from flat CLI flags (spellings are pinned to pi/hop). *)
 type run = {
   mode : output;
   session_id : string option;
@@ -359,10 +342,7 @@ type command =
 
 let usage_error msg = Error (`Msg msg)
 
-(* Flag combinations that cannot mean anything are usage errors (exit 124)
-   rather than silent precedence rules: [--json] and [--stream] both own stdout
-   and disagree on its shape; a handoff writes no session entries, so it has no
-   stream to render. *)
+(* Reject contradictory flag combinations as usage errors (exit 124). *)
 let command (opts : opts) =
   match (opts.set_kind, opts.list_kind, opts.handoff, opts.session_id) with
   | _ when opts.json && opts.stream ->

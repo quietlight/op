@@ -1,7 +1,3 @@
-(* The permission gate. Pure path rules over a small sliding window of recent
-   calls, with nu scripts delegated to the injected static AST gate; see
-   gate.mli for the philosophy and residual gaps. No I/O of its own. *)
-
 type verdict =
   | Allow
   | Warn of string
@@ -11,27 +7,16 @@ type verdict =
 
 type nu_gate = script:string -> verdict
 
-(* Internal config, deliberately not user-facing. *)
-let window_size = 4 (* last N calls remembered *)
+let window_size = 4
 
+(* [verdict] is the rule-only base verdict (never window-derived) so reminders
+   do not perpetuate themselves. [reminded] makes reminders one-shot while
+   keeping the entry in the window for escalation. *)
 type entry = { verdict : verdict; mutable reminded : bool }
-(* [verdict] here is the call's *base* verdict (from the rules alone), never the
-   window-combined one — so a reminder Warn injected by persistence does not
-   itself keep persistence alive. [reminded] makes the reminder one-shot: set
-   once a flagged call has been cited in a reminder, so clean results stop
-   carrying the trailer while the entry stays in the window for escalation. *)
-
-type t = {
-  nu : nu_gate option;
-      (* The nu tool's static AST gate, injected by main (built over a nu
-         subprocess). Absent -> a [nu] tool call fails closed. *)
-  cwd : string;
-  mutable window : entry list;
-}
+type t = { nu : nu_gate option; cwd : string; mutable window : entry list }
 
 let v ?nu ~cwd () = { nu; cwd; window = [] }
 
-(* Keep the last [n] elements of [xs] (order preserved). *)
 let keep_last n xs =
   let len = List.length xs in
   if len <= n then xs
@@ -42,22 +27,13 @@ let keep_last n xs =
     in
     drop (len - n) xs
 
-(* The reason to cite back to the model in a one-shot reminder, and so only for
-   verdicts that say the agent reached for something it may not have. An
-   [Unparsed] script is a typo, already explained in its own result; reminding
-   the model that "a recent call was flagged" teaches it to avoid a command
-   nobody objected to. *)
+(* Exclude [Unparsed] from reminders: syntax slips are not policy violations. *)
 let reason_of = function
   | Warn r | Deny r | Code_red r -> Some r
   | Unparsed _ | Allow -> None
 
-(* --- paths ------------------------------------------------------------ *)
-
-(* Textual normalization: treat '\\' as '/', drop a leading drive letter
-   ("C:"), then split, drop '.'/empty segments and resolve '..' against
-   preceding components. No realpath (symlink traversal is a documented v1
-   gap). Returns the resolved segments of the absolute path. Windows shapes are
-   handled on every host so a path's verdict never depends on the platform. *)
+(* Textual path normalization (handles '\\' and drive letters on every host so
+   verdicts are platform-independent; no realpath). *)
 let normalize_segments abs =
   let abs = String.map (function '\\' -> '/' | c -> c) abs in
   let abs =
@@ -75,25 +51,11 @@ let normalize_segments abs =
        []
   |> List.rev
 
-(* --- shared with Gate_nu ---------------------------------------------- *)
-
-(* Secret-bearing paths: a nu script could [open] them and the file tools could
-   otherwise touch the non-dot ones ([server.pem], [terraform.tfstate]), so
-   {!path_verdict} denies a file-tool path matching one and {!Gate_nu}'s
-   layer-2 text check denies a script naming one. [/proc] is here because
-   [/proc/self/environ] (or the parent's, from nu) is op's whole inherited
-   environment, API keys included; it must not follow a path character, which
-   keeps a data path like [/mnt/x/proc/] out while catching it after a quote,
-   bracket, brace or colon. All of [~/.op_global] is here, not only the agent
-   config: the sessions hold every past run's prompts, file contents and tool
-   output, and a nu read would send them to the current provider. A nested
-   [op --list]/[--handoff] (the [op] external) is the deliberate way in. The history entry is deliberately broad
-   ([.bash_history], [.zsh_history], [.psql_history], bare [.history]): pasted
-   secrets end up in all of them. [.config/gh] is gh's token store; the trailing \b keeps
-   [.config/ghostty] and friends out. [.config/himalaya] is the mail config:
-   it carries an IMAP/SMTP password inline ([password.raw]), and its
-   [password.cmd] is an exec primitive the AST walk never sees, since himalaya
-   runs it through [/bin/sh] itself. *)
+(* Secret-bearing paths denied in both file tools and [Gate_nu] Layer 2.
+   Includes: [/proc] (exposes op's inherited env via /proc/*/environ; anchored
+   so paths like /mnt/x/proc/ pass), all of [~/.op_global] (keys + sessions),
+   shell/db [*history] files, [.config/gh] (word boundary avoids ghostty), and
+   [.config/himalaya] (inline passwords + password.cmd shell exec). *)
 let sensitive_path_re =
   Re.Perl.compile_pat ~opts:[ `Caseless ]
     {|(\.ssh\b|id_(rsa|dsa|ecdsa|ed25519)|\.aws/credentials|\.netrc\b|\.gnupg\b|\.env\b|\.op_global\b|\.pem\b|\.p12\b|\.pfx\b|\.kube/config|\.docker/config|\.npmrc\b|\.pypirc\b|\.cargo/credentials|\.git-credentials\b|\.config/gh\b|\.pgpass\b|\.config/gcloud\b|\.config/himalaya\b|\.config/typesafe\b|\.config/rclone\b|\.cache/huggingface\b|\.kaggle\b|\.azure\b|\.vault-token\b|\.local/share/keyrings\b|terraform\.tfstate|\.[a-z_]*history\b|(^|[^\w.~/$)-])/proc\b)|}
@@ -112,15 +74,12 @@ let path_verdict ~cwd raw =
           (String.trim (Re.Group.get g 0))
     | None -> Allow
 
-(* --- dispatch + window ------------------------------------------------ *)
-
 let str_arg args field =
   match Yojson.Safe.Util.member field args with
   | `String s -> Some s
   | _ -> None
 
-(* The base verdict for a call. Absent/malformed args pass through as Allow:
-   the tool's own validation will produce the real error. *)
+(* Absent/malformed args pass as [Allow] so the tool emits its own error. *)
 let base_verdict t (tc : Llm.tool_call) =
   match tc.name with
   | "read" | "write" | "edit" -> (
@@ -131,21 +90,13 @@ let base_verdict t (tc : Llm.tool_call) =
       match (str_arg tc.arguments "script", t.nu) with
       | None, _ -> Allow
       | Some script, Some nu -> nu ~script
-      (* Absent nu gate -> fail closed: a nu call must clear its static AST
-         gate first. *)
       | Some _, None ->
           Deny
             "the nu tool's static gate is not configured; nu calls are denied")
   | _ -> Allow
 
-(* Combine the base verdict with the recent window:
-   1. escalation: >= 2 denies already in the window and this call also denied
-      -> the agent is pushing on the gate; stop it.
-   2. one-shot reminder: the first allowed call after a flagged one cites the
-      newest un-reminded flag, then marks every pending flag reminded — one
-      reminder per flagging burst, not a sticky trailer on every clean result.
-      A later flagged call re-arms it. The entries themselves stay in the
-      window untouched, so escalation is unaffected. *)
+(* Escalate to [Code_red] on the 3rd [Deny] in the window (ignoring [Unparsed]);
+   on [Allow], emit a one-shot reminder for the newest un-reminded flag. *)
 let combine ~recent ~base =
   let denies =
     List.length
@@ -154,10 +105,6 @@ let combine ~recent ~base =
          recent)
   in
   match base with
-  (* Only [Deny] is counted, on both sides. Escalation exists to stop an agent
-     leaning on the gate; a script that would not parse is a syntax slip, and
-     in the session history about half the runs this rule ended had one of
-     those among their three strikes. *)
   | Deny _ when denies >= 2 -> Code_red "repeatedly attempting blocked actions"
   | Allow -> (
       let pending e = if e.reminded then None else reason_of e.verdict in

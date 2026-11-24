@@ -1,19 +1,5 @@
-(* OpenAI chat-completions adapter with native function calling.
-
-   Serializes [Tool.t list] into the OpenAI [tools] schema and parses
-   [tool_calls] back into [Llm.assistant_turn]. This is the adapter for any
-   provider that speaks the OpenAI chat-completions wire format with native
-   tool support — including any provider with an unrecognized api string, which
-   [Client] assumes is OpenAI-compatible. *)
-
 let ( let* ) = Result.bind
 
-(* ------------------------------------------------------------------ *)
-(* Tool schema serialization                                          *)
-(* ------------------------------------------------------------------ *)
-
-(* Convert a [Tool.t] into the OpenAI tools JSON schema:
-   { type: "function", function: { name, description, parameters } } *)
 let tool_spec (t : Tool.t) : Yojson.Safe.t =
   `Assoc
     [
@@ -29,14 +15,6 @@ let tool_spec (t : Tool.t) : Yojson.Safe.t =
 
 let tool_specs tools = List.map tool_spec tools
 
-(* ------------------------------------------------------------------ *)
-(* Message serialization                                              *)
-(* ------------------------------------------------------------------ *)
-
-(* A user message with attachments: content becomes a typed part list, text
-   first then each block. ollama's OpenAI-compatible endpoint accepts base64
-   data URIs in image_url. A text-only message keeps a bare string (see
-   [message_json]). *)
 let user_parts_json ~text ~blocks =
   let text_parts =
     if text = "" then []
@@ -57,15 +35,10 @@ let user_parts_json ~text ~blocks =
   in
   `List (text_parts @ List.map part blocks)
 
-(* Map one neutral message to an OpenAI chat-completions message object.
-   [System] becomes { role: "system", content: ... }.
-   Assistant turns with tool calls include the [tool_calls] array.
-   Tool results use { role: "tool", tool_call_id, content }. *)
 let message_json : Llm.message -> Yojson.Safe.t option = function
   | System s ->
       Some (`Assoc [ ("role", `String "system"); ("content", `String s) ])
   | User { text; blocks = [] } ->
-      (* Text-only: bare string content, byte-identical to the pre-image wire. *)
       Some (`Assoc [ ("role", `String "user"); ("content", `String text) ])
   | User { text; blocks } ->
       Some
@@ -74,9 +47,6 @@ let message_json : Llm.message -> Yojson.Safe.t option = function
              ("role", `String "user"); ("content", user_parts_json ~text ~blocks);
            ])
   | Assistant { text; tool_calls; _ } ->
-      (* Reasoning is captured for display/session but never replayed here:
-         chat-completions providers don't want prior reasoning resent (see
-         Llm.thinking). *)
       let base_fields =
         [ ("role", `String "assistant"); ("content", `String text) ]
       in
@@ -105,8 +75,7 @@ let message_json : Llm.message -> Yojson.Safe.t option = function
       in
       Some (`Assoc fields)
   | Tool { id; content; is_error; _ } ->
-      (* OpenAI tool messages carry only tool_call_id + content; there is
-         no is_error field in the spec. Prefix the content instead. *)
+      (* Chat-completions tool messages have no [is_error] field. *)
       let content = if is_error then "Error: " ^ content else content in
       Some
         (`Assoc
@@ -116,18 +85,13 @@ let message_json : Llm.message -> Yojson.Safe.t option = function
              ("content", `String content);
            ])
 
-(* ------------------------------------------------------------------ *)
-(* Request body                                                       *)
-(* ------------------------------------------------------------------ *)
-
 let build_body ?max_tokens ~model ~tools ~messages () =
   let json_messages = List.filter_map message_json messages in
   let fields =
     [ ("model", `String model); ("messages", `List json_messages) ]
   in
   let fields =
-    (* Only advertised when there are some: strict endpoints reject an empty
-       tools array, and tool_choice without tools. *)
+    (* Strict endpoints reject an empty [tools] array or [tool_choice] without tools. *)
     match tools with
     | [] -> fields
     | _ ->
@@ -137,19 +101,12 @@ let build_body ?max_tokens ~model ~tools ~messages () =
           ]
   in
   let fields =
-    (* Only sent when configured: chat-completions providers apply their own
-       defaults when the field is absent. *)
     match max_tokens with
     | Some n -> fields @ [ ("max_tokens", `Int n) ]
     | None -> fields
   in
   Yojson.Safe.to_string (`Assoc fields)
 
-(* ------------------------------------------------------------------ *)
-(* Response parsing                                                   *)
-(* ------------------------------------------------------------------ *)
-
-(* Parse the [tool_calls] array from a chat-completions response message. *)
 let parse_tool_calls json =
   let open Yojson.Safe.Util in
   match member "tool_calls" json with
@@ -167,23 +124,19 @@ let parse_tool_calls json =
               let arguments = member "arguments" func in
               match (name, arguments) with
               | `String name_str, `String args_str -> (
-                  (* arguments is a JSON string that must be parsed *)
                   match Yojson.Safe.from_string args_str with
                   | exception Yojson.Json_error _ ->
                       Some { Llm.id; name = name_str; arguments = `Assoc [] }
                   | args_json ->
                       Some { Llm.id; name = name_str; arguments = args_json })
               | `String name_str, _ ->
-                  (* arguments wasn't a string; use as-is (unlikely) *)
                   Some { Llm.id; name = name_str; arguments }
               | _ -> None)
           | _ -> None)
         calls
   | _ -> []
 
-(* Split inline <think> tags out of assistant content.
-   Returns Some (reasoning, visible_text) when a closing </think> is found,
-   otherwise None.  Opening <think> is optional. *)
+(* Split inline [<think>...</think>] out of content; opening tag is optional. *)
 let split_think_tags text : (string * string) option =
   let close = "</think>" in
   let close_len = String.length close in
@@ -228,14 +181,8 @@ let split_think_tags text : (string * string) option =
       in
       Some (reasoning, after)
 
-(* Extract visible text and any inline reasoning from an assistant [content]
-   value. OpenAI-compatible providers return [content] either as a plain string
-   or as an array of typed chunks (e.g. Mistral's magistral reasoning models: a
-   "thinking" chunk whose [thinking] is itself an array of {type:text} parts,
-   followed by "text" chunks carrying the answer). Concatenate the text chunks
-   for the visible answer and the thinking chunks for the reasoning, so the
-   answer isn't silently dropped. Mirrors the array handling in
-   [openai_responses_adapter]. *)
+(* Content is either a string or an array of typed chunks (e.g. Mistral
+   magistral returns "thinking" and "text" chunks). *)
 let parse_content message =
   let open Yojson.Safe.Util in
   match member "content" message with
@@ -271,9 +218,6 @@ let parse_content message =
       (text, if thinking = "" then None else Some thinking)
   | _ -> ("", None)
 
-(* Resolve thinking field and strip inline <think> tags from text. Captured for
-   display/session only — the [signature] is always [None] because this adapter
-   never replays reasoning on the wire. *)
 let resolve_thinking ?content_thinking message text =
   let open Yojson.Safe.Util in
   let reasoning text = Some (Llm.Reasoning { text; signature = None }) in
@@ -289,9 +233,8 @@ let resolve_thinking ?content_thinking message text =
         List.find_map probe
           [ "reasoning_content"; "reasoning"; "reasoning_text" ]
   in
-  (* Some providers (MiniMax-M2.7) duplicate field reasoning as inline
-     <think> tags in the content, so the tags are stripped from the
-     visible text either way; the wire field wins as the reasoning. *)
+  (* Some providers (e.g. MiniMax) duplicate field reasoning as inline <think>
+     tags; strip tags from visible text either way and prefer the wire field. *)
   match (from_field, split_think_tags text) with
   | Some r, Some (_, visible) -> (reasoning r, visible)
   | Some r, None -> (reasoning r, text)
@@ -306,21 +249,15 @@ let parse_usage json =
   | u -> (
       match (member "prompt_tokens" u, member "completion_tokens" u) with
       | `Int total, `Int output ->
-          (* OpenAI caching is automatic; it reports only cache reads
-             (cached_tokens), never a separate write count. The details object
-             is absent for many providers (e.g. Kimi), and [member] raises on a
-             non-object, so guard the nested lookup. *)
           let cached =
             match member "prompt_tokens_details" u with
             | `Assoc _ as d -> (
                 match member "cached_tokens" d with `Int n -> n | _ -> 0)
             | _ -> 0
           in
-          (* prompt_tokens already counts the cached tokens. *)
           Some (Llm.usage_uncached ~total ~cached ~output ~cache_creation:0)
       | _ -> None)
 
-(* Parse a full chat-completions response into an [Llm.assistant_turn]. *)
 let parse_response json_str : (Llm.assistant_turn, Transport.error) result =
   let* json = Transport.json_of_string json_str in
   let open Yojson.Safe.Util in
@@ -338,10 +275,6 @@ let parse_response json_str : (Llm.assistant_turn, Transport.error) result =
       with Yojson.Safe.Util.Type_error _ ->
         Error (Transport.Unexpected_response json))
   | [] -> Error (Transport.Unexpected_response json)
-
-(* ------------------------------------------------------------------ *)
-(* Call                                                               *)
-(* ------------------------------------------------------------------ *)
 
 let call ?max_tokens ~post ~base_url ~api_key ~model ~tools ~messages () =
   let base = base_url |> String.trim |> Transport.strip_trailing_slash in

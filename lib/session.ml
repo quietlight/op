@@ -1,19 +1,10 @@
-(* Pi-compatible session logging. See session.mli for the contract and
-   docs/pi-session-format.md for the full format description.
-
-   Entries are appended (and flushed) as they happen, so a crashed or
-   interrupted run still leaves a readable log. *)
-
 type t = {
   oc : out_channel option;
-      (* [None] for an unsaved session: entries are still built, linked and
-         handed to the sink, they just have no file to land in *)
   path : string;
   rng : Random.State.t;
   ids : (string, unit) Hashtbl.t;
   sink : Yojson.Safe.t -> unit;
-      (* tee for every written line, e.g. --stream's stdout *)
-  mutable leaf : string option; (* parentId for the next entry *)
+  mutable leaf : string option;
 }
 
 let version = 3
@@ -21,27 +12,20 @@ let version = 3
 let err_leaf_not_found id =
   Fmt.kstr (fun s -> Error s) "leaf id %s not found in session" id
 
-(* --- time --------------------------------------------------------------- *)
-
 let now_ms () = Unix.gettimeofday () *. 1000.
 
-(* ISO-8601 UTC with millisecond precision, e.g. 2026-06-10T01:46:04.743Z *)
 let iso8601 ms =
   let tm = Unix.gmtime (ms /. 1000.) in
   Fmt.str "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ" (tm.tm_year + 1900)
     (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
     (int_of_float ms mod 1000 |> abs)
 
-(* --- identifiers --------------------------------------------------------- *)
-
 let hex bytes =
   String.concat "" (List.map (Fmt.str "%02x") (Array.to_list bytes))
 
 let random_bytes rng n = Array.init n (fun _ -> Random.State.int rng 256)
 
-(* UUIDv7: 48-bit big-endian millisecond timestamp, then random bits with the
-   version (7) and variant (10) fields set. Used for session ids so that file
-   names sort chronologically, mirroring pi. *)
+(* UUIDv7 (48-bit ms timestamp + version 7 / variant 10) for time-sorted filenames. *)
 let uuid_v7 rng ms =
   let b = random_bytes rng 16 in
   let t = Int64.of_float ms in
@@ -54,7 +38,7 @@ let uuid_v7 rng ms =
   Fmt.str "%s-%s-%s-%s-%s" (String.sub s 0 8) (String.sub s 8 4)
     (String.sub s 12 4) (String.sub s 16 4) (String.sub s 20 12)
 
-(* Entry ids are 8 hex chars (as in pi), unique within the session. *)
+(* 8-hex-char entry id unique within the session (pi convention). *)
 let fresh_id t =
   let rec gen () =
     let id = hex (random_bytes t.rng 4) in
@@ -64,15 +48,11 @@ let fresh_id t =
   Hashtbl.add t.ids id ();
   id
 
-(* --- paths --------------------------------------------------------------- *)
-
 let default_root () =
   match Util.home_dir () with
   | Some home -> Ok (Filename.concat home ".op_global/sessions")
   | None -> Error "HOME environment variable not set"
 
-(* Mirror pi's encoding: strip one leading separator, then map path
-   separators and ':' to '-', wrapped in '--'. *)
 let dir_for ~root ~cwd =
   let stripped =
     if cwd <> "" && (cwd.[0] = '/' || cwd.[0] = '\\') then
@@ -84,11 +64,7 @@ let dir_for ~root ~cwd =
   in
   Filename.concat root (Fmt.str "--%s--" mapped)
 
-(* --- entry writing ------------------------------------------------------- *)
-
-(* The single choke point every line — header and tree entries alike — passes
-   through, so the sink sees exactly the file's lines, in order. It runs after
-   the flush: the log on disk is never held hostage to the consumer. *)
+(* Flush to disk before invoking [t.sink] so disk state never depends on the consumer. *)
 let write_json t json =
   Option.iter
     (fun oc ->
@@ -98,8 +74,6 @@ let write_json t json =
     t.oc;
   t.sink json
 
-(* Append a tree entry: id/parentId/timestamp are filled in, and the new
-   entry becomes the leaf (parent of whatever comes next). *)
 let append t ~type_ fields =
   let id = fresh_id t in
   let parent = match t.leaf with Some p -> `String p | None -> `Null in
@@ -119,21 +93,15 @@ let append_model_change t ~provider ~model =
   append t ~type_:"model_change"
     [ ("provider", `String provider); ("modelId", `String model) ]
 
-(* --- public api ----------------------------------------------------------- *)
-
 let path t = t.path
 let leaf t = t.leaf
 
-(* The session id is the [<timestamp>_<uuid>.jsonl] filename's uuid: the part
-   after the last '_' (the timestamp carries no '_'). *)
 let id t =
   let base = Filename.remove_extension (Filename.basename t.path) in
   match String.rindex_opt base '_' with
   | Some i -> String.sub base (i + 1) (String.length base - i - 1)
   | None -> base
 
-(* The opening lines every session starts with, saved or not: the header, then
-   the [model_change] and [thinking_level_change] entries. *)
 let write_preamble t ~id ~timestamp ~cwd ~parent_session ~provider ~model =
   let parent =
     match parent_session with
@@ -165,8 +133,7 @@ let unsaved ?(sink = ignore) ?parent_session ~cwd ~provider ~model () =
 
 let v ?(sink = ignore) ?parent_session ~dir ~cwd ~provider ~model () =
   try
-    (* 0700: the session files are 0600, but a 0755 directory would still hand
-       every other user on the host the session listing. *)
+    (* 0700 dir / 0600 file: session logs contain private file contents and output. *)
     Util.mkdir_p ~perm:0o700 dir;
     let rng = Random.State.make_self_init () in
     let ms = now_ms () in
@@ -176,8 +143,6 @@ let v ?(sink = ignore) ?parent_session ~dir ~cwd ~provider ~model () =
       String.map (function ':' | '.' -> '-' | c -> c) timestamp
     in
     let path = Filename.concat dir (Fmt.str "%s_%s.jsonl" file_stamp id) in
-    (* 0600: session logs can hold file contents and command output, so they are
-       created private to the user rather than the default world-readable 0644. *)
     let oc = open_out_gen [ Open_wronly; Open_creat; Open_trunc ] 0o600 path in
     let t =
       { oc = Some oc; path; rng; ids = Hashtbl.create 64; sink; leaf = None }
@@ -186,13 +151,8 @@ let v ?(sink = ignore) ?parent_session ~dir ~cwd ~provider ~model () =
     Ok t
   with Sys_error msg | Unix.Unix_error (_, msg, _) -> Error msg
 
-(* pi stores the message-level timestamp as Unix milliseconds. *)
 let ms_field () = ("timestamp", `Int (int_of_float (now_ms ())))
 
-(* A pi user content list: the text body (when non-empty) then each attachment
-   as an image block ([docs/pi-session-format.md]). Writing image blocks is
-   schema-valid and additive; a text-only turn keeps the single text-block list
-   op has always written. *)
 let user_content ~text ~blocks =
   let text_block =
     if text = "" && blocks <> [] then []
@@ -220,11 +180,7 @@ let append_user t ?(blocks = []) ~text () =
          ms_field ();
        ])
 
-(* A pi Usage object. Token counts come from the provider when known; the cost
-   fields stay 0 since op does not know prices. cacheRead/cacheWrite carry
-   prompt-caching token counts when the provider reports them (0 otherwise).
-   With [~input:0 ~output:0 ~cache_read:0 ~cache_write:0] this is the fully
-   zeroed object used when the turn carried no usage. *)
+(* Pi Usage object; cost fields stay 0 since op does not track pricing. *)
 let usage_object ~input ~output ~cache_read ~cache_write =
   let zero = `Int 0 in
   `Assoc
@@ -306,8 +262,6 @@ let append_assistant t ~api ~provider ~model (turn : Llm.assistant_turn) =
          ms_field ();
        ])
 
-(* pi's [details] is optional and omitted when absent, so a details-free result
-   keeps the exact shape op has always written. *)
 let details_field (tr : Llm.tool_result) =
   match tr.details with Some d -> [ ("details", d) ] | None -> []
 
@@ -331,11 +285,6 @@ let append_tool_result t (tr : Llm.tool_result) =
 
 let close t = Option.iter close_out t.oc
 
-(* --- resuming ------------------------------------------------------------ *)
-
-(* Reopen an existing session file for appending. Reading (id collection, leaf
-   validation) is delegated to {!Session_read}; here we only open the file in
-   append mode and seed the id set so fresh ids stay unique. *)
 let resume ?(sink = ignore) ~path ~leaf () =
   let ( let* ) = Result.bind in
   let* tree = Session_read.load path in

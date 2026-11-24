@@ -1,13 +1,7 @@
-(* Provider-neutral agent loop. It speaks only in Llm.message / Llm.assistant_turn
-   and dispatches tool calls through Tools; it never touches a provider wire
-   format (that is the adapters' job, injected via [call]). See agent.mli. *)
-
 type event =
   | Assistant_turn of Llm.assistant_turn
   | Tool_finished of Llm.tool_result
   | Tool_ids_repaired
-(* A provider returned a duplicate or empty tool-call id; the loop remade
-         the ids unique. Emitted at most once per run. *)
 
 type outcome =
   | Finished
@@ -20,15 +14,12 @@ let default_system =
    the result, then continue until the task is complete. Give a short final \
    answer."
 
-(* Render a list as "a, b and c" for a natural capability sentence. *)
 let rec join_and = function
   | [] -> ""
   | [ x ] -> x
   | [ x; y ] -> x ^ " and " ^ y
   | x :: rest -> x ^ ", " ^ join_and rest
 
-(* One sentence describing the actual tool set (selectable via --tools), so the
-   model is told exactly which capabilities this run grants. *)
 let capabilities ~tools =
   let has t = List.mem t tools in
   let files =
@@ -61,10 +52,7 @@ let system_prompt ~cwd ~date ~tools =
      not guaranteed to persist between tool calls."
     default_system (capabilities ~tools) cwd date
 
-(* Run a single tool call, turning success/failure into a neutral result.
-   Any exception from the tool (e.g. Yojson Type_error when the model sends
-   non-object arguments) is caught and converted into an is_error result so the
-   agent loop never crashes. *)
+(* Catch non-cancellation tool exceptions and surface them as error results. *)
 let dispatch_tool ~tools (tc : Llm.tool_call) : Llm.tool_result =
   match List.find_opt (fun (t : Tool.t) -> t.name = tc.name) tools with
   | None ->
@@ -76,8 +64,6 @@ let dispatch_tool ~tools (tc : Llm.tool_call) : Llm.tool_result =
         details = None;
       }
   | Some t -> (
-      (* A tool that raises becomes an error result the model can see, not a
-         dead run; cancellation still unwinds the fiber. *)
       let ran =
         match t.run tc.arguments with
         | result -> Ok result
@@ -112,13 +98,10 @@ let dispatch_tool ~tools (tc : Llm.tool_call) : Llm.tool_result =
             details = None;
           })
 
-(* Guarantee tool-call ids are unique across the run. Some OpenAI-compatible
-   providers reuse one id (e.g. "functions.bash:0") for every call; replaying a
-   history with duplicate ids breaks tool-call/result correlation (a hard 400 on
-   Anthropic). We keep the first sighting of an id — so clean provider ids are
-   preserved and logged as-is — and rewrite empties and later collisions to a
-   freshly minted unique id, warning once via [emit]. [seen] is seeded from the
-   initial messages so a new turn cannot collide with a resumed session's ids. *)
+(* Ensure tool-call ids are unique across the run, seeded from prior history.
+   Some OpenAI-compatible providers reuse ids (e.g. "functions.bash:0"), which
+   breaks correlation and causes 400s on Anthropic. Keep the first occurrence
+   and rewrite empty or duplicate ids, emitting [Tool_ids_repaired] once. *)
 let uniquifier ~emit messages =
   let seen = Hashtbl.create 16 in
   List.iter
@@ -149,10 +132,6 @@ let uniquifier ~emit messages =
     Hashtbl.replace seen id ();
     { tc with id }
 
-(* Dispatch one allowed/warned/denied call, emitting its finish event. A Warn
-   runs the tool then appends steering to its result; a Deny short-circuits
-   to an is_error result without running the tool. (Code_red is
-   handled by the caller, which must also answer the turn's remaining calls.) *)
 let gated_result ~tools ~emit ~verdict (tc : Llm.tool_call) =
   let result =
     match verdict with
@@ -173,8 +152,6 @@ let gated_result ~tools ~emit ~verdict (tc : Llm.tool_call) =
   emit (Tool_finished result);
   result
 
-(* Answer a call with a gate-termination error without running it, for draining
-   a turn's calls after Code_red. *)
 let terminated_result ~emit ~msg (tc : Llm.tool_call) =
   let r =
     {
@@ -188,10 +165,8 @@ let terminated_result ~emit ~msg (tc : Llm.tool_call) =
   emit (Tool_finished r);
   Llm.Tool r
 
-(* Run a turn's tool calls through the gate, sequentially. Returns [`Done] with
-   the result messages, or, when the gate raised Code_red, [`Killed] with the
-   whole turn's calls answered as errors (so the session log has no unanswered
-   tool calls) plus the reason. *)
+(* Run tool calls sequentially through [gate]. On [Code_red], answer remaining
+   calls as errors so the session has no unanswered tool calls. *)
 let run_calls ~gate ~tools ~emit calls =
   let rec go acc = function
     | [] -> `Done (List.rev acc)
@@ -212,9 +187,7 @@ let run ~call ~tools ~emit ?(gate = fun _ -> Gate.Allow) ?(max_steps = 150)
     ?(over_context = fun _ -> false) ~messages () =
   let uniquify = uniquifier ~emit messages in
   let rec loop steps history =
-    (* Both caps are tested here, before the call, so the history handed back is
-       always wire-valid: no assistant turn is left holding unanswered tool
-       calls, unlike the Gate_killed path which has to answer them itself. *)
+    (* Check caps before calling the model so history stays wire-valid. *)
     if steps >= max_steps then Ok (history, Max_steps_reached)
     else if over_context history then Ok (history, Context_limit_reached)
     else

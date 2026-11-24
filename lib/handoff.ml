@@ -1,22 +1,12 @@
-(* Handoff document assembly. See handoff.mli. *)
-
 type files = { read : string list; modified : string list }
 
-(* The path argument every file tool shares. [glob] (a removed tool that older
-   sessions still contain) is deliberately not counted:
-   its "path" is a search root and its "pattern" is not a file, so listing it
-   would send the next thread hunting through directories nobody opened. *)
 let path_of_call (tc : Llm.tool_call) =
   match Yojson.Safe.Util.member "path" tc.arguments with
   | `String p when p <> "" -> Some p
   | _ -> None
 
-(* Ids of the tool calls whose result came back an error — a gate denial, a
-   missing file, an edit whose old_string did not match. The model asked, but
-   nothing happened, so those paths must not be reported as read or modified: a
-   fabricated <modified-files> entry is exactly the invention this document
-   promises not to make. A call with no result at all (the run was cut off
-   mid-turn) is treated the same way. *)
+(* Map each tool-call id to its [is_error] status; calls without a non-error
+   result are excluded from read/modified file lists. *)
 let failed_call_ids history =
   List.fold_left
     (fun acc -> function
@@ -90,8 +80,6 @@ let goal_section = function
        off, and say under Goal that you inferred it."
   | goal -> Fmt.str "The user's goal for the new thread is: %s" goal
 
-(* Only the goal varies per run: that the file lists are appended is a constant
-   of how [assemble] builds the document, so it lives in the system prompt. *)
 let user_prompt ~goal =
   Fmt.str
     "Write the handoff prompt for a fresh thread continuing this work.\n\n%s"

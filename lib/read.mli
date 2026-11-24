@@ -10,14 +10,10 @@ val pp_error : error -> string
 
 val run :
   path:string -> ?offset:int -> ?limit:int -> unit -> (string, error) result
-(** [run ~path ?offset ?limit ()] is the contents of the file at [path] with
-    1-indexed line numbers, starting at [offset] (default 1) and reading at most
-    [limit] lines (default 2000). Individual lines are truncated to a fixed
-    width and the whole result to a byte budget; if either cap or the line limit
-    stops the read short, a trailing "... (more lines from offset N)" note says
-    where to continue. The file is streamed, so memory stays bounded by one line
-    whatever the file's size; anything but a regular file (a device, a FIFO) is
-    refused. *)
+(** [run ~path ?offset ?limit ()] streams [path] (regular files only) with
+    1-indexed line numbers from [offset] (default 1) for up to [limit] lines
+    (default 2000), capping line width and total bytes. Appends a continuation
+    offset note if truncated. *)
 
 val tool : Tool.t
 (** [tool] is the read tool definition. *)

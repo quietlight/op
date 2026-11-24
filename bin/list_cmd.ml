@@ -16,9 +16,7 @@ let list_fail_config ~json e =
   if json then list_fail ?hint ~json msg
   else list_fail ~json (Op.Config.pp_error e)
 
-(* [Sys.getcwd] raises [Sys_error] when the process's working directory has been
-   removed; route that through [list_fail] so --list still honours its "one JSON
-   object on stdout, exit 1" contract instead of leaking a backtrace. *)
+(* Route missing-cwd Sys_error through [list_fail] to keep the --json contract. *)
 let cwd_or_fail ~json () =
   try Sys.getcwd ()
   with Sys_error msg ->
@@ -26,16 +24,12 @@ let cwd_or_fail ~json () =
       (fun s -> list_fail ~json s)
       "cannot determine working directory: %s" msg
 
-(* [tail n xs] keeps the last [n] rows (every --list view orders oldest/first so
-   the tail is the freshest, most relevant slice) and reports how many were
-   dropped off the front, so the caller can nudge about the hidden rows. *)
+(* Keep the last [n] rows (freshest slice) and return the omitted count. *)
 let tail n xs =
   let len = List.length xs in
   if len <= n then (xs, 0) else (List.drop (len - n) xs, len - n)
 
-(* When --limit hid rows, say so on stderr (a diagnostic, not data — keeps stdout a
-   clean list for pipes) so --list never truncates silently. The --json path
-   returns the capped array and silences its own stderr, so skip it there. *)
+(* Report hidden rows on stderr in text mode so stdout stays pipeable. *)
 let truncated_hint ~json ~omitted =
   if (not json) && omitted > 0 then
     Fmt.epr "… %d more; use --limit N to show more\n" omitted
@@ -129,10 +123,8 @@ let list_messages ~json session limit =
                * = branch point   branch: op --sessionId %s --parentId <entry>\n"
               session)
 
-(* One row per branch tip: the ids [--parentId] takes to *continue* a branch, as
-   opposed to --list messages' entry ids, which fork mid-thread. Tips are the
-   only way to name a branch whose last entry is a tool result — the shape a run
-   killed mid-turn leaves behind — since those never appear in --list messages. *)
+(* Branch tips for [--parentId] continuation, including tips ending on a tool
+   result (which [--list messages] omits). *)
 let list_branches ~json session limit =
   let cwd = cwd_or_fail ~json () in
   let result =

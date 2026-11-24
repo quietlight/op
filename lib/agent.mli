@@ -1,38 +1,31 @@
 (** Provider-neutral agent loop.
 
-    [run] is parameterised over the model-call function so it can be unit-tested
-    without a network (tests pass a scripted fake; bin/main passes a Client.call
-    closure). The loop only ever sees Llm.message values; each provider adapter
-    serializes them to its own wire format. *)
+    [run] takes a model-call function and operates solely on {!Llm.message}
+    values; wire serialization lives in the provider adapters. *)
 
 type event =
   | Assistant_turn of Llm.assistant_turn
-      (** one assistant turn, before its tool calls (if any) run *)
+      (** Assistant turn, emitted before its tool calls run. *)
   | Tool_finished of Llm.tool_result
   | Tool_ids_repaired
-      (** a provider returned a duplicate or empty tool-call id and the loop
-          remade the ids unique; emitted at most once per run *)
+      (** Duplicate or empty provider tool-call ids were replaced; emitted at
+          most once per run. *)
 
 type outcome =
-  | Finished  (** the model stopped requesting tools *)
-  | Max_steps_reached  (** the step cap was hit before the model finished *)
+  | Finished  (** Model stopped requesting tools. *)
+  | Max_steps_reached  (** Step cap reached before completion. *)
   | Gate_killed of string
-      (** the permission gate raised Code_red; the run was stopped after
-          answering every pending tool call with an error. Carries the reason.
-      *)
+      (** Gate returned {!Gate.constructor-Code_red}; pending calls were
+          answered with errors. Carries the reason. *)
   | Context_limit_reached
-      (** the context window filled past the configured limit; the run stopped
-          between turns, with a complete history to hand off from *)
+      (** Context window crossed the configured limit between turns. *)
 
 val default_system : string
-(** [default_system] A minimal default system prompt. Seam for a richer prompt
-    later. *)
+(** Default system prompt. *)
 
 val system_prompt : cwd:string -> date:string -> tools:string list -> string
-(** [system_prompt ~cwd ~date ~tools] is {!val-default_system}, a one-sentence
-    description of the capabilities granted by the [tools] names present (so the
-    prompt reflects the actual selection), and an environment block describing
-    the working directory [cwd] and current [date]. *)
+(** [system_prompt ~cwd ~date ~tools] builds the system prompt for the selected
+    [tools], working directory [cwd], and [date]. *)
 
 val run :
   call:(messages:Llm.message list -> (Llm.assistant_turn, string) result) ->
@@ -44,16 +37,12 @@ val run :
   messages:Llm.message list ->
   unit ->
   (Llm.message list * outcome, string) result
-(** [run ~call ~tools ~emit ?gate ?max_steps ?over_context ~messages ()] drives
-    the conversation forward from [messages] until the model stops requesting
-    tools, [max_steps] (default 75) is reached, [over_context] reports the
-    context window full ({!constructor-Context_limit_reached}), or [gate] raises
-    {!Gate.constructor-Code_red} ({!constructor-Gate_killed}). [over_context]
-    (default: never) is a closure over the run's model and config, keeping the
-    loop provider-neutral; it is consulted before each model call, so a stopped
-    run's history has no unanswered tool calls. Returns the updated, wire-valid
-    neutral history. [gate] is consulted before every tool call (default: allow
-    all); a {!Gate.constructor-Deny} yields an [is_error] result and the loop
-    continues, a {!Gate.constructor-Warn} appends to the tool's result. [emit]
-    fires for every assistant turn and tool result as they happen, in history
-    order. *)
+(** [run ~call ~tools ~emit ?gate ?max_steps ?over_context ~messages ()] loops
+    until the model finishes, [max_steps] (default 150) is reached,
+    [over_context] returns [true] ({!constructor-Context_limit_reached}), or
+    [gate] returns {!Gate.constructor-Code_red} ({!constructor-Gate_killed}).
+    Caps are checked before each model call so the returned history has no
+    unanswered tool calls. [gate] defaults to allowing all calls;
+    {!Gate.constructor-Deny} produces an error tool result and
+    {!Gate.constructor-Warn} appends a warning to the tool output. [emit] fires
+    in history order. *)

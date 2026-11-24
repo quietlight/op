@@ -1,4 +1,3 @@
-(* Section-local helpers from agent tests *)
 let turn ?(text = "") ?(thinking = None) ?(usage = None) tool_calls :
     Op.Llm.assistant_turn =
   { text; thinking; tool_calls; usage }
@@ -118,7 +117,6 @@ let test_anthropic_parse_redacted () =
       | _ -> Alcotest.fail "expected redacted")
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
-(* Content blocks of the first (assistant) message in a serialized body. *)
 let assistant_blocks ~thinking ~tool_calls =
   let messages = [ Op.Llm.Assistant (turn ~text:"hi" ~thinking tool_calls) ] in
   Op.Anthropic_adapter.For_testing.build_body ~model:"m" ~tools:[] ~messages ()
@@ -131,7 +129,6 @@ let assistant_blocks ~thinking ~tool_calls =
 let block_type b = Yojson.Safe.Util.(member "type" b |> to_string)
 
 let test_anthropic_replays_thinking_first () =
-  (* A signed thinking block must be replayed first, before text/tool_use. *)
   let blocks =
     assistant_blocks
       ~thinking:
@@ -152,8 +149,6 @@ let test_anthropic_replays_thinking_first () =
     (member "signature" first |> to_string)
 
 let test_anthropic_drops_unsigned_thinking () =
-  (* Reasoning without a signature (OpenAI-origin) is not replayed: Anthropic
-     rejects an unsigned thinking block. *)
   let blocks =
     assistant_blocks
       ~thinking:(Some (Op.Llm.Reasoning { text = "reason"; signature = None }))
@@ -175,8 +170,6 @@ let test_anthropic_replays_redacted () =
     "data" "ENC"
     Yojson.Safe.Util.(member "data" (List.hd blocks) |> to_string)
 
-(* A non-empty tool set is advertised; the empty case (field omitted, not sent
-   as an empty array) is covered in test_anthropic_serializes_messages. *)
 let test_anthropic_tools_advertised () =
   let tool : Op.Tool.t =
     {

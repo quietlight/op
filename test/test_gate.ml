@@ -1,8 +1,3 @@
-(* Tests for Op.Gate: pure path rules, the shared sensitive-path pattern,
-   and the sliding-window combination. Everything is exercised through [check]
-   on a fresh gate (except the window tests, which reuse one gate to observe
-   state across calls). *)
-
 let cwd = "/home/u/proj"
 
 let tc ?(args = `Assoc []) name : Op.Llm.tool_call =
@@ -26,8 +21,6 @@ let check_tag msg expected tcall =
   let gate = Op.Gate.v ~cwd () in
   Alcotest.(check string) msg expected (tag (Op.Gate.check gate tcall))
 
-(* --- paths --- *)
-
 let test_paths () =
   let deny name = check_tag name "deny" in
   let allow name = check_tag name "allow" in
@@ -50,15 +43,12 @@ let test_paths () =
     (path_tc "write" (cwd ^ "/skills/x.md"));
   deny "cwd/.op is no longer allowlisted"
     (path_tc "write" (cwd ^ "/.op/agent/skills/x.md"));
-  (* op's own environment, API keys included *)
   deny "proc environ" (path_tc "read" "/proc/self/environ");
   deny "proc via .." (path_tc "read" "/tmp/../proc/1/cmdline");
   allow "proc deeper in a data path" (path_tc "read" "/mnt/x/proc/a.csv");
   deny "non-dot secret on a data drive"
     (path_tc "read" "/mnt/backup/server.pem");
   deny "terraform state" (path_tc "edit" "infra/terraform.tfstate")
-
-(* --- sensitive_path_re: the secret-path pattern shared with Gate_nu --- *)
 
 let test_sensitive_paths_match () =
   let hits name s =
@@ -101,32 +91,24 @@ let test_sensitive_path_near_misses () =
   misses "proc inside a data path" "open /mnt/data/proc/x.csv";
   misses "proc after a computed dir" "open $\"($root)/proc/x.csv\""
 
-(* --- window: one-shot flagged-call reminder --- *)
-
 let test_warn_fires_once_then_rearms () =
   let gate = Op.Gate.v ~cwd () in
-  (* a denied call flags the window *)
   Alcotest.(check string)
     "flagging call" "deny"
     (tag (Op.Gate.check gate (path_tc "write" ".env")));
-  (* the first allowed call carries the reminder... *)
   let allowed () = Op.Gate.check gate (path_tc "read" "notes.txt") in
   let v = allowed () in
   Alcotest.(check string) "first allowed warns" "warn" (tag v);
   Alcotest.(check bool)
     "reminder cites the flag" true
     (Test_support.contains (reason v) "reminder");
-  (* ...and only the first: subsequent clean calls are plain Allow *)
   Alcotest.(check string) "second allowed is clean" "allow" (tag (allowed ()));
   Alcotest.(check string) "third allowed is clean" "allow" (tag (allowed ()));
-  (* a fresh flagged call re-arms the reminder *)
   Alcotest.(check string)
     "re-flagging call" "deny"
     (tag (Op.Gate.check gate (path_tc "write" ".env")));
   Alcotest.(check string) "reminder fires again" "warn" (tag (allowed ()));
   Alcotest.(check string) "then clean again" "allow" (tag (allowed ()))
-
-(* --- window: escalation --- *)
 
 let test_repeated_denies_escalate () =
   let gate = Op.Gate.v ~cwd () in
@@ -137,10 +119,6 @@ let test_repeated_denies_escalate () =
     "third denied call escalates" "code_red"
     (tag (deny ()))
 
-(* A script that would not parse is blocked but is not a strike. Syntax slips
-   are routine (about half the runs escalation ever ended had one among their
-   three), so they must neither count toward it nor raise the flagged-call
-   reminder on the next clean call. *)
 let test_unparsed_is_not_a_strike () =
   let next = ref Op.Gate.Allow in
   let nu ~script:_ = !next in
@@ -166,13 +144,9 @@ let test_unparsed_is_not_a_strike () =
   Alcotest.(check string)
     "no reminder after a typo" "allow" (call Op.Gate.Allow)
 
-(* --- nu dispatch, over the injected [?nu] closure --- *)
-
 let nu_tc s = tc ~args:(`Assoc [ ("script", `String s) ]) "nu"
 
 let test_nu_no_gate_fails_closed () =
-  (* No [?nu] closure -> a nu call is denied: nothing executable is allowed by
-     default. *)
   let gate = Op.Gate.v ~cwd () in
   Alcotest.(check string)
     "no nu gate -> deny" "deny"

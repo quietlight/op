@@ -1,22 +1,12 @@
-(** Configuration loading for op.
+(** Configuration loading from [~/.op_global/agent]:
+    - [models.json]: provider definitions ([baseUrl], optional [api] defaulting
+      to ["openai-completions"], [apiKey] or [apiKeyEnv], and [models]).
+    - [settings.json]: defaults, context limit, handoff model, and nu profiles.
 
-    Config layout under ~/.op_global/agent:
-    - models.json : provider entries, each carrying baseUrl (required), api
-      (optional, default "openai-completions"), apiKey, and models.
-    - settings.json : defaultProvider / defaultModel
-
-    models.json is the sole source of provider connection data: there are no
-    built-in providers and no auth.json. The [apiKey] field in a provider entry
-    is the API key used for that provider; [apiKeyEnv] is the alternative — it
-    names an environment variable to read the key from, so the key need never be
-    written to disk at all. Setting both is an error, since there is no sensible
-    precedence. A variable that is unset warns and leaves the provider keyless
-    rather than failing the load: one absent key must not take down
-    [--list models] or a run against a different provider.
-
-    The nu child cannot see either form: it gets an environment allowlist that
-    admits no key names, so [apiKeyEnv] does not widen what a script can read
-    (see bin/main's [nu_child_env]). *)
+    Setting both [apiKey] and [apiKeyEnv] is an error. An unset [apiKeyEnv]
+    warns and leaves that provider keyless so other providers and [--list] still
+    work. The [nu] child gets an allowlisted environment without API keys (see
+    {!Nu_sandbox}). *)
 
 module String_map : Map.S with type key = string
 
@@ -27,151 +17,117 @@ type api =
   | Google_generative_ai
   | Other of string
 
-(** [error] Why a config directory failed to load. *)
+(** Config load failures. *)
 type error =
   | Missing_home
   | File_error of string * string
   | Json_error of string * string
   | Missing_field of string * string
   | Invalid_field of string * string
-  | Missing_models_file of string
-      (** No [models.json] in the given config directory. *)
+  | Missing_models_file of string  (** No [models.json] in config dir. *)
 
-(** [nu_path_mode] What PATH the nu child (and its subprocess tree) sees.
-    {!constructor-Toolbox} (the default) is the locked-down symlink dir alone.
-    {!constructor-Host} prepends the toolbox to the host PATH so allowlisted
-    build drivers ([make], [opam], [go]) can resolve their children ([gcc],
-    [ld], [git]) — the gate's name-based allowlist on the {e script} is
-    unchanged, and the subprocess tree was already conceded by allowlisting
-    those drivers. *)
+(** [PATH] exposed to the [nu] child. {!constructor-Toolbox} (default) exposes
+    only the symlink toolbox; {!constructor-Host} prepends the toolbox to the
+    host [PATH] so build drivers ([make], [opam], [go]) can find their children.
+*)
 type nu_path_mode = Toolbox | Host
 
 type nu_profile = {
   name : string;
-      (** The profile's key in [nuProfiles] (["none"] for the empty profile),
-          surfaced to the nu child as [$env.OP_NU_PROFILE]. *)
-  externals : string list;
-      (** The external commands the toolbox PATH may contain. *)
+      (** Profile key in [nuProfiles] (["none"] when empty); passed as
+          [$env.OP_NU_PROFILE]. *)
+  externals : string list;  (** Allowed external commands in the toolbox. *)
   module_dirs : string list;
-      (** Directories whose [*.nu] files the gate lets scripts [use]. *)
+      (** Directories whose [*.nu] files scripts may [use]. *)
   plugins : string list;
-      (** Plugin names ([polars] -> [nu_plugin_polars]) op registers and the
-          gate lets scripts [plugin use]. *)
+      (** Plugin names (e.g. ["polars"] -> [nu_plugin_polars]) scripts may
+          [plugin use]. *)
   path_mode : nu_path_mode;
-      (** [pathMode]: ["host"] -> {!constructor-Host}; anything else ->
+      (** [pathMode]: ["host"] -> {!constructor-Host}, else
           {!constructor-Toolbox}. *)
   env_allow : string list;
-      (** [envAllow]: extra environment variable {i names} this profile passes
-          through to the nu child, on top of the small locale/home base set. The
-          child env is an allowlist, not the host environment, so a driver
-          needing e.g. [OPAMROOT] names it here. *)
+      (** Extra host env var names passed through to the [nu] child. *)
   tools : string list option;
-      (** [tools]: the run's default tool set when [--tools] is not given.
-          [None] (field absent) means every known tool; [Some []] (an explicit
-          [[]] in settings.json) is a tool-less chat run. Names are validated
-          against {!Tools.known} at run start, not at parse time. *)
+      (** Default tool set when [--tools] is absent: [None] means all tools,
+          [Some []] means tool-less chat. Validated at run start. *)
 }
-(** [nu_profile] A named profile from [nuProfiles] in settings.json, selecting a
-    run's capabilities: the default tool set, and what the nu tool may reach
-    (externals, modules, plugins, PATH mode, child environment). *)
+(** Named capability profile from [nuProfiles] in [settings.json]. *)
 
 type settings = {
   provider : string option;
   model : string option;
   handoff_model : string option;
-      (** [handoffModel]: an optional ["provider/model"] spec for [--handoff]'s
-          summarising call. It writes the prompt that seeds the next thread, so
-          it should be a strong model with a context window at least as large as
-          the session's own. [None] falls back to the run's model. *)
+      (** Optional ["provider/model"] for [--handoff]; [None] uses the run's
+          model. *)
   context_limit : float option;
-      (** [contextLimit]: the fraction of the model's [contextWindow] at which a
-          run stops with {!Agent.constructor-Context_limit_reached}. [None] uses
-          {!default_context_limit}. Parsing rejects anything outside [(0, 1]].
-          Checked between turns against the usage the provider last reported: a
-          stopping threshold, not a cap on the size of the next request. *)
+      (** Fraction in [(0, 1\]] of [contextWindow] at which a run stops between
+          turns; [None] uses {!default_context_limit}. *)
   nu_profiles : (string * nu_profile) list;
-      (** [nuProfiles]: named toolbox profiles, in file order — the sole source
-          of the nu toolbox allowlist. *)
+      (** Named profiles in file order. *)
   nu_default_profile : string option;
-      (** [nuDefaultProfile]: the profile used when [--profile] is not given. *)
+      (** Profile used when [--profile] is omitted. *)
 }
-(** [settings] The configured defaults from [settings.json]; a field is [None]
-    when the file is absent or omits it. *)
+(** Parsed [settings.json]; omitted fields are [None]. *)
 
 type model = {
   id : string;
   max_tokens : int option;
   context_window : int option;
 }
-(** [model] A model entry from models.json; {!field-max_tokens} is the optional
-    [maxTokens] field capping the response length for that model, and
-    {!field-context_window} the optional [contextWindow] — the total prompt
-    budget, against which a run's context usage is reported and capped. *)
+(** Model entry from [models.json]. *)
 
 type provider = {
   name : string;
   base_url : string;
   api : api;
-      (** e.g. {!constructor-Openai_completions},
-          {!constructor-Anthropic_messages}. *)
-  api_key : string option;  (** The API key for this provider, if any. *)
+  api_key : string option;
   models : model list;
 }
-(** [provider] A provider definition from models.json. *)
+(** Provider entry from [models.json]. *)
 
 type t
 
 val string_of_api : api -> string
-(** [string_of_api a] Return the string representation of [a]. *)
+(** [string_of_api a] is the wire-name string for [a]. *)
 
 val pp_error : error -> string
-(** [pp_error e] Return a human-readable description of [e]. *)
+(** [pp_error e] formats [e] for display. *)
 
 val json_error : error -> string * string option
-(** [json_error e] returns a short error string plus an optional hint suitable
-    for JSON envelopes. *)
+(** [json_error e] returns a short error message and optional hint for JSON
+    envelopes. *)
 
 val load_config : unit -> (t, error) result
-(** [load_config ()] Load and parse [models.json] and [settings.json] from
-    [$HOME/.op_global/agent]. [models.json] is required
-    ({!constructor-Missing_models_file} otherwise); a missing [settings.json]
-    yields empty defaults. *)
+(** [load_config ()] loads [models.json] (required) and [settings.json]
+    (optional) from [$HOME/.op_global/agent]. *)
 
 val default_provider : t -> string option
-(** [default_provider c] Return the configured default provider for [c], or
-    [None] when [settings.json] is absent or omits it. *)
+(** [default_provider c] is [defaultProvider] from [settings.json]. *)
 
 val default_model : t -> string option
-(** [default_model c] Return the configured default model for [c], or [None]
-    when [settings.json] is absent or omits it. *)
+(** [default_model c] is [defaultModel] from [settings.json]. *)
 
 val handoff_model : t -> string option
-(** [handoff_model c] Return the configured [handoffModel] spec used by
-    [--handoff], or [None] to fall back to the run's model. *)
+(** [handoff_model c] is [handoffModel] from [settings.json]. *)
 
 val default_context_limit : float
-(** [default_context_limit] The fraction of the context window a run may use
-    when [contextLimit] is unset: [0.85]. *)
+(** Default [contextLimit] fraction ([0.85]). *)
 
 val context_limit : t -> float
-(** [context_limit c] The configured [contextLimit], or
+(** [context_limit c] is the configured [contextLimit] or
     {!default_context_limit}. *)
 
 val resolve_nu_profile : t -> name:string option -> (nu_profile, string) result
-(** [resolve_nu_profile c ~name] Return the nu toolbox profile for a run: [name]
-    (from [--profile]) or, failing that, [nuDefaultProfile] must exist in
-    [nuProfiles]; with neither set, the empty profile: no tools (a chat run)
-    and, if [--tools] adds nu, no externals, modules or plugins. The error names
-    the available profiles. *)
+(** [resolve_nu_profile c ~name] resolves [name] (or [nuDefaultProfile]) in
+    [nuProfiles]. With neither set, returns the empty chat profile
+    ([tools = Some []], no externals/modules/plugins). *)
 
 val parse_model_spec : string -> string option * string
-(** [parse_model_spec spec] Split a [--model] spec into an optional provider and
-    a model. With a '/', the part before the first '/' is the provider and the
-    rest is the model; otherwise the whole spec is the model and the provider is
-    [None]. *)
+(** [parse_model_spec spec] splits on the first ['/'] into
+    [(Some provider, model)], or [(None, spec)] if no ['/'] is present. *)
 
 val provider : t -> string -> provider option
-(** [provider c name] Resolve a provider by name from models.json. *)
+(** [provider c name] looks up [name] in [models.json]. *)
 
 val resolve_default_spec :
   t ->
@@ -181,53 +137,42 @@ val resolve_default_spec :
     | `Unknown_provider of string
     | `Unknown_model of string * string ] )
   result
-(** [resolve_default_spec c spec] Validate a ["provider/model"] spec for use as
-    the persisted default and return the [(provider, model)] pair to save. The
-    provider must be explicit ([`Missing_provider] otherwise) and known to [c]
-    ([`Unknown_provider] otherwise), and the model must be one the provider
-    lists ([`Unknown_model (provider, model)] otherwise). *)
+(** [resolve_default_spec c spec] validates ["provider/model"] against [c],
+    requiring an explicit known provider and a listed model. *)
 
 val providers : t -> provider list
-(** [providers c] All provider definitions from models.json, in name order. *)
+(** [providers c] returns all providers in name order. *)
 
 val max_tokens_for : provider -> model:string -> int option
-(** [max_tokens_for p ~model] Return the configured [maxTokens] for [model], if
-    the provider lists the model and the entry sets one. Adapters fall back to
-    their own default otherwise. *)
+(** [max_tokens_for p ~model] returns the model's configured [maxTokens], if
+    listed and set. *)
 
 val context_window_for : provider -> model:string -> int option
-(** [context_window_for p ~model] Return the configured [contextWindow] for
-    [model], or [None] when the provider does not list the model (a [--model]
-    override may name an unlisted one) or the entry omits it. [None] disables
-    context reporting and the context cap for the run. *)
+(** [context_window_for p ~model] returns the model's configured
+    [contextWindow], if listed and set. [None] disables context reporting and
+    capping. *)
 
 val save_default : provider:string -> model:string -> (unit, error) result
-(** [save_default ~provider ~model] Persist [provider]/[model] as the new
-    default, writing [defaultProvider] and [defaultModel] back to
-    [settings.json] while preserving all other fields already present in the
-    file. *)
+(** [save_default ~provider ~model] updates [defaultProvider] and [defaultModel]
+    in [settings.json], preserving all other fields. *)
 
-(** Internal hooks for parser-focused tests. Production callers should prefer
-    {!val-load_config} and [find_provider]. *)
+(** Internal hooks for parser tests. *)
 module For_testing : sig
   val parse_settings : Yojson.Safe.t -> (settings, error) result
-  (** [parse_settings json] parses the contents of a [settings.json]. *)
+  (** [parse_settings json] parses [settings.json]. *)
 
   val parse_provider : name:string -> Yojson.Safe.t -> (provider, error) result
-  (** [parse_provider ~name json] parses a single provider entry from
-      [models.json]. *)
+  (** [parse_provider ~name json] parses one provider entry. *)
 
   val parse_models : Yojson.Safe.t -> (provider String_map.t, error) result
-  (** [parse_models json] parses the provider map of a [models.json]. *)
+  (** [parse_models json] parses the provider map of [models.json]. *)
 
   val update_settings_json :
     Yojson.Safe.t option -> provider:string -> model:string -> Yojson.Safe.t
-  (** [update_settings_json json ~provider ~model] rewrites the default
-      provider/model keys in [json] (or a fresh object), preserving any other
-      fields. *)
+  (** [update_settings_json json ~provider ~model] updates the default keys in
+      [json] (or a fresh object), preserving other fields. *)
 
   val make_config :
     ?settings:settings -> ?providers:provider String_map.t -> unit -> t
-  (** [make_config ?settings ?providers ()] builds a config value directly,
-      bypassing the filesystem. *)
+  (** [make_config ?settings ?providers ()] constructs a config directly. *)
 end

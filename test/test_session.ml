@@ -1,9 +1,5 @@
 open Test_support
 
-(* Writer tests for Op.Session: header/chain shape, message serialisation, cwd
-   encoding, and resume error handling. Reading sessions back is covered by
-   Test_session_read. *)
-
 let turn ?(text = "") ?(thinking = None) ?(usage = None) tool_calls :
     Op.Llm.assistant_turn =
   { text; thinking; tool_calls; usage }
@@ -20,8 +16,6 @@ let read_jsonl path =
 let member = Yojson.Safe.Util.member
 let str field json = Yojson.Safe.Util.(member field json |> to_string)
 
-(* A populated session: user prompt, assistant turn with a tool call, the
-   tool result, and a final assistant answer. *)
 let write_sample_session dir =
   let session =
     match
@@ -69,12 +63,10 @@ let test_session_header_and_chain () =
     "header version" 3
     Yojson.Safe.Util.(member "version" header |> to_int);
   Alcotest.(check string) "header cwd" "/tmp/proj" (str "cwd" header);
-  (* file name is <timestamp>_<session id>.jsonl with : and . mapped to - *)
   let base = Filename.basename path in
   Alcotest.(check bool)
     "file named after session id" true
     (Filename.check_suffix base (str "id" header ^ ".jsonl"));
-  (* every entry is the child of the previous one; the first has parentId null *)
   let entries = List.tl lines in
   Alcotest.(check string)
     "first entry" "model_change"
@@ -142,13 +134,9 @@ let test_session_message_shapes () =
 let test_session_file_is_private () =
   with_temp_dir @@ fun dir ->
   let path = write_sample_session dir in
-  (* Session logs can hold file contents and command output, so they are created
-     private to the owner (0600), not the default world-readable 0644. *)
   let perm = (Unix.stat path).Unix.st_perm land 0o777 in
   Alcotest.(check int) "session file mode is 0600" 0o600 perm
 
-(* parentSession appears in the header when given ([--fromSession] points it at
-   the session being continued); a plain session header omits it. *)
 let test_session_parent_session_header () =
   with_temp_dir @@ fun dir ->
   let session =
@@ -170,8 +158,6 @@ let test_session_parent_session_header () =
     "absent when not given" true
     (member "parentSession" plain = `Null)
 
-(* A run whose log cannot be opened still produces its entries: the sink sees
-   the same header-then-linked-entries shape a saved session writes. *)
 let test_session_unsaved_still_emits () =
   let seen = ref [] in
   let session =
@@ -203,10 +189,6 @@ let test_session_resume_unknown_leaf () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected an error for an unknown leaf id"
 
-(* The [--stream] tee: the sink must see exactly the file's lines, in order —
-   header, model_change, thinking_level_change, then each appended entry. If
-   the two ever diverge, a stream consumer is reading a different session than
-   the one on disk. *)
 let test_session_sink_mirrors_file () =
   with_temp_dir @@ fun dir ->
   let seen = ref [] in
@@ -234,8 +216,6 @@ let test_session_sink_mirrors_file () =
     [ "session"; "model_change"; "thinking_level_change"; "message"; "message" ]
     (List.map (str "type") streamed)
 
-(* A resumed session has no header to re-emit: the consumer already knows the
-   id it passed to --sessionId, so the stream carries only the new entries. *)
 let test_session_sink_on_resume () =
   with_temp_dir @@ fun dir ->
   let path = write_sample_session dir in

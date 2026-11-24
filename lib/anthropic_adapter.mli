@@ -1,8 +1,4 @@
-(** Anthropic Messages adapter for the agent loop.
-
-    Serializes a provider-neutral [Llm.message list] into the Anthropic Messages
-    wire format (native tool_use / tool_result blocks) and parses the response
-    back into an [Llm.assistant_turn]. *)
+(** Anthropic Messages API adapter ([/v1/messages]). *)
 
 val call :
   ?max_tokens:int ->
@@ -15,15 +11,13 @@ val call :
   unit ->
   (Llm.assistant_turn, Transport.error) result
 (** [call ?max_tokens ~post ~base_url ~api_key ~model ~tools ~messages ()] posts
-    a turn to [<base_url>/v1/messages] and parses the assistant response.
-    [max_tokens] caps the response length (default 4096; the Messages API
-    requires the field). *)
+    a turn to [<base_url>/v1/messages]. [max_tokens] defaults to 4096 (required
+    by the API). *)
 
-(** Internal hooks for serialization/parse tests. *)
+(** Internal hooks for serialization and parsing tests. *)
 module For_testing : sig
   val tool_specs : Tool.t list -> Yojson.Safe.t list
-  (** [tool_specs tools] renders [tools] as Anthropic Messages tool-spec JSON.
-  *)
+  (** [tool_specs tools] serializes [tools] to Anthropic tool-spec JSON. *)
 
   val build_body :
     ?max_tokens:int ->
@@ -32,10 +26,9 @@ module For_testing : sig
     messages:Llm.message list ->
     unit ->
     string
-  (** [build_body ?max_tokens ~model ~tools ~messages ()] is the JSON request
-      body for an Anthropic Messages turn. *)
+  (** [build_body ?max_tokens ~model ~tools ~messages ()] builds the request
+      JSON body. *)
 
   val parse_response : string -> (Llm.assistant_turn, Transport.error) result
-  (** [parse_response body] parses an Anthropic Messages response body into an
-      assistant turn. *)
+  (** [parse_response body] parses an Anthropic Messages response body. *)
 end

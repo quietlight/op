@@ -25,8 +25,6 @@ let test_read_offset_limit () =
         (contains out "more lines from offset 4")
   | Error e -> Alcotest.fail (Op.Read.pp_error e)
 
-(* The last line of the file ends the slice with no continuation note, and an
-   offset past the end reports how many lines there are. *)
 let test_read_tail_and_past_end () =
   with_temp_dir @@ fun dir ->
   let path = Filename.concat dir "f.txt" in
@@ -42,7 +40,6 @@ let test_read_tail_and_past_end () =
         "past end" "(file has 3 lines; offset 9 is past end)" out
   | Error e -> Alcotest.fail (Op.Read.pp_error e)
 
-(* A device never ends; reading one must be refused, not attempted. *)
 let test_read_device_refused () =
   match Op.Read.run ~path:"/dev/zero" ~limit:1 () with
   | Error (Op.Read.Read_error msg) ->
@@ -67,8 +64,6 @@ let test_read_directory () =
 let test_read_byte_cap () =
   with_temp_dir @@ fun dir ->
   let path = Filename.concat dir "big.txt" in
-  (* Many long lines: well over the 256 KB result budget within the default
-     line window, so the read stops early and notes the remainder. *)
   let line = String.make 1000 'x' in
   let content = String.concat "\n" (List.init 1000 (fun _ -> line)) ^ "\n" in
   write_file path content;

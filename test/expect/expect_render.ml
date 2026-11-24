@@ -1,18 +1,9 @@
 open Op
 
-(* Human-transcript renderer tests. Render.entry/footer are pure — they take a
-   session entry (or the result envelope) and return lines — so the fixtures
-   here are the JSON op actually writes, taken from lib/session.ml's shapes, and
-   the assertion is the rendered text. Colour is off throughout: the ANSI codes
-   are the caller's concern, and plain text is what stays readable in a diff.
-
-   The same in-process style as expect_run_json.ml. *)
-
 let show lines = List.iter print_endline lines
 let renderer () = Render.v ~color:false ~cwd:"/work" ()
 let json s = Yojson.Safe.from_string s
 
-(* One assistant turn: [text] (may be empty) plus a list of toolCall blocks. *)
 let assistant ?(text = "") ?(usage = 42) calls =
   let text_block =
     if text = "" then []
@@ -62,7 +53,6 @@ let result ?(is_error = false) ?details ~id ~name text =
           @ details) );
     ]
 
-(* A numbered read result, [n] lines, in the shape lib/read.ml emits. *)
 let numbered n =
   String.concat "\n"
     (List.init n (fun i -> Fmt.str "%6d\tline %d" (i + 1) (i + 1)))
@@ -154,8 +144,6 @@ let%expect_test "read: a call with no slice, and a result the preview fits" =
              3	line 3
     |}]
 
-(* The preview boundary: 5 lines is the budget, so 5 shows whole and 6 gets the
-   count footer. *)
 let%expect_test "preview boundary at exactly the budget" =
   let t = renderer () in
   show
@@ -185,8 +173,6 @@ let%expect_test "preview boundary at exactly the budget" =
         …  6 lines total
     |}]
 
-(* Two degradations: glob's default root is not worth a column, and a result whose call
-   was never seen has no path to name. *)
 let%expect_test "a glob rooted at the cwd, and a result with no call" =
   let t = renderer () in
   show
@@ -263,10 +249,6 @@ let%expect_test "nu: the script is shown, the exit status is lifted out" =
         session.ml
     |}]
 
-(* A nu result whose last line only *looks* like the exit footer must not be
-   sliced as one — a truncated log is exactly the case Render promises never to
-   raise on. Each of these is a non-match, so the line stays in the body and the
-   summary falls back to "done". *)
 let%expect_test "a malformed exit footer is left alone rather than parsed" =
   let t = renderer () in
   let nu text = Render.entry t (result ~id:"c1" ~name:"nu" text) in
@@ -368,9 +350,6 @@ let%expect_test "thinking blocks are shown, capped" =
     Here is the answer.
     |}]
 
-(* [op --render] folds [Render.line] over a session file or a piped --stream:
-   entries go through [entry], the stream's closing result line through
-   [footer], and anything that is not JSON renders nothing. *)
 let%expect_test "line: entries, the result line, and noise" =
   let t = Render.v ~color:false ~cwd:"/work" ~echo_user:true () in
   List.iter

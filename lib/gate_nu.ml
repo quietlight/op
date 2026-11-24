@@ -1,30 +1,8 @@
-(* The static AST gate for the [nu] tool (see gate_nu.mli). Layer 1 walks the
-   flattened Nushell token stream to enforce the capability boundary (externals
-   subset of the toolbox; no network/exec/dispatch builtins). Layer 2 denies
-   scripts that name a secret path or write a dot-file. The token stream is
-   obtained through an injected closure so the walk stays pure and unit-testable
-   on canned JSON.
-
-   The stream comes from [ast … --json --flatten]: a flat JSON array of tokens,
-   each an object [{"content": "curl", "shape": "shape_external", …}]. Flatten is
-   what makes the walk closure-safe — it emits the contents of every closure and
-   block body ([each { }], [do { }], [if { }], [def f [] { }]) as ordinary
-   shape-tagged tokens rather than the opaque integer block-ids that [get block]
-   would leave behind. So a denied builtin nested in a closure surfaces as a
-   plain [shape_internalcall] token and is caught like any top-level call. *)
-
 let ( let* ) = Result.bind
-
-(* An anti-runaway bound, not a slop cap: nu scripts carrying SQL are
-   legitimately long. *)
 let max_script_chars = 32_768
 
-(* Builtins that grant a capability the toolbox PATH cannot contain: network
-   and arbitrary-program execution. Matched on the first word of a call's head
-   so subcommands (`http get`) are covered. `job` is deliberately absent: job
-   closures are flattened and walked like any other code, and nu kills
-   background jobs when the script exits, so `job spawn` adds concurrency but
-   no capability and cannot outlive the tool call. *)
+(* Network/exec builtins matched on first word; [job] is allowed because job
+   closures are flattened and die on script exit. *)
 let denied_builtins = [ "http"; "run-external"; "exec"; "start" ]
 
 let first_word s =
@@ -34,19 +12,15 @@ let starts_with ~prefix s =
   String.length s >= String.length prefix
   && String.sub s 0 (String.length prefix) = prefix
 
-(* [export use], [export extern], [export module] each flatten to a single
-   token whose first word is "export". The prefix changes what a module
-   exposes, not what runs, so every check judges the command after it — or
-   [export use ./x.nu] would load a file the gate never read. *)
+(* Strip leading "export " so [export use]/[export extern]/[export module] are
+   judged identically to their non-exported forms. *)
 let unexported s =
   let p = "export " in
   if starts_with ~prefix:p s then
     String.sub s (String.length p) (String.length s - String.length p)
   else s
 
-(* Null-safe object lookup: [member] raises on a non-object
-   (including [`Null]), and the AST is full of nulls (empty [pipe], absent
-   [redirection]), so a raising accessor would crash the generic walk. *)
+(* Null-safe lookup: AST nodes contain many [`Null] fields. *)
 let member key = function
   | `Assoc fields -> (
       match List.assoc_opt key fields with Some v -> v | None -> `Null)
@@ -55,16 +29,10 @@ let member key = function
 let string_member key json =
   match member key json with `String s -> Some s | _ -> None
 
-(* A flattened token's [content] (the source text of this span, e.g. "curl",
-   "http get") and [shape] (nu's classification, e.g. "shape_external"). *)
 let token_content t = string_member "content" t
 let token_shape t = string_member "shape" t
 
-(* Why a script was refused. The two are kept apart because the gate treats
-   them differently downstream: a [Policy] refusal is the agent reaching for
-   something the profile does not grant, a [Syntax] one is a script nu could
-   not parse — blocked all the same, but not counted against the agent (see
-   {!Gate.Unparsed}). *)
+(* [Policy] maps to [Gate.Deny]; [Syntax] maps to [Gate.Unparsed]. *)
 type refusal = Policy of string | Syntax of string
 
 let refusal_message = function Policy s | Syntax s -> s
@@ -76,10 +44,6 @@ let map_refusal f = function
 let err_deny fmt = Fmt.kstr (fun s -> Error (Policy s)) fmt
 let err_syntax fmt = Fmt.kstr (fun s -> Error (Syntax s)) fmt
 
-(* The classic Unix text-tool reflexes, mapped to their nu-builtin
-   translations. The deny is the teachable moment: a model reaching for grep
-   should get the pipeline to paste into its next call, not the
-   network-delegation hint below (right for curl, wrong for grep). *)
 let text_tool_hints =
   [
     ( [ "grep"; "egrep"; "fgrep"; "rg"; "ag" ],
@@ -103,15 +67,7 @@ let text_tool_hint name =
     (fun (names, hint) -> if List.mem name names then Some hint else None)
     text_tool_hints
 
-(* A [shape_external] token: the literal name of an external command. It must be
-   a bare toolbox command — a path form (`^/usr/bin/x`, `./x`) bypasses the
-   toolbox PATH, and a name outside the toolbox is denied. Computed heads
-   (`^$cmd`) never reach here: they flatten to [shape_garbage], handled below.
-
-   A path whose basename is itself allowlisted gets a steering hint: the usual
-   reason for dispatching into a build dir is smoke-testing a just-built
-   artifact, and the toolbox symlink (resolved through the host PATH at exec
-   time) already reaches a rebuilt binary behind the bare name. *)
+(* Path-form dispatch bypasses the toolbox PATH and is always denied. *)
 let check_external ~externals name =
   if String.contains name '/' || String.contains name '\\' then
     let base = Filename.basename name in
@@ -147,10 +103,7 @@ let check_external ~externals name =
            parse it with `from json`."
           name allowed
 
-(* The module named by a `use` (or plugin named by a `plugin use`): the first
-   non-flag token after it (`use --reload std` -> "std"). None if there is
-   nothing to import (a parse error nu would already have rejected, but we fail
-   closed). *)
+(* First non-flag token after [use] (e.g. [use --reload std] -> "std"). *)
 let rec use_module = function
   | t :: rest -> (
       match token_shape t with
@@ -160,8 +113,8 @@ let rec use_module = function
 
 let is_flag t = token_shape t = Some "shape_flag"
 
-(* [plugin use NAME], bare: nu accepts a flag on either side of the name, and
-   [--plugin-config] would point it at a registry op did not write. *)
+(* Require bare [plugin use NAME] with no flags so [--plugin-config] cannot
+   redirect to an unvetted registry. *)
 let bare_plugin_use ~plugins = function
   | name :: next ->
       (not (is_flag name))
@@ -171,15 +124,11 @@ let bare_plugin_use ~plugins = function
       && not (match next with t :: _ -> is_flag t | [] -> false)
   | [] -> false
 
-(* [module NAME { ... }] is inline code the walk sees, since flatten emits the
-   block body as ordinary tokens; [module ./file.nu] loads a file it never
-   read. *)
+(* Inline [module NAME { ... }] is flattened and walked; file [module ...] is not. *)
 let inline_module = function
   | _ :: body :: _ -> token_shape body = Some "shape_block"
   | _ -> false
 
-(* Loading a profile plugin is fine (op supplies the registry); loading
-   anything else — or naming a registry by hand — is not. *)
 let check_plugin_use ~plugins rest =
   if bare_plugin_use ~plugins rest then Ok ()
   else
@@ -192,12 +141,9 @@ let check_plugin_use ~plugins rest =
 
 let check_use ~modules rest =
   match use_module rest with
-  (* The built-in standard library — [std] itself or a [std/...] submodule.
-     A bare [std]-prefixed *file* ([use stdfoo.nu]) would still source unseen
-     code, so match [std] exactly or under a '/'. *)
+  (* Exact "std" or "std/..." only (not e.g. "stdfoo.nu"). *)
   | Some m when m = "std" || starts_with ~prefix:"std/" m -> Ok ()
-  (* A vetted profile module, by exact bare name (scanned names carry no
-     path separator, so path forms can never match). *)
+  (* Scanned module names carry no path separators. *)
   | Some m when List.mem m modules -> Ok ()
   | _ ->
       err_deny
@@ -219,12 +165,8 @@ let check_command ~modules ~plugins ~rest content =
        and parse with `from json`."
       w
   else if w = "extern" then
-    (* `extern` declares a signature for an external, and the call site then
-       flattens to a bare shape_internalcall with *no* shape_external token
-       anywhere — so the toolbox allowlist in [check_external] never sees the
-       name, while nu still runs the program. It is the one construct that
-       executes outside the toolbox with nothing for the walk to catch, so deny
-       the declaration itself. *)
+    (* Calls to an [extern]-declared command flatten as [shape_internalcall]
+       with no [shape_external], bypassing [check_external]; deny the decl. *)
     err_deny
       "`extern` is denied: it declares an external command the gate cannot see \
        at the call site, which would run a program outside the toolbox. Call \
@@ -252,12 +194,8 @@ let check_command ~modules ~plugins ~rest content =
   else if w = "use" then check_use ~modules rest
   else Ok ()
 
-(* Builtins that reach past the gate under a name that says neither network
-   nor exec, each with the reason quoted back. Nushell adds such commands
-   between releases ([run], [run-internal] and [%] dispatch arrived after
-   0.114), which is why test_nu pins the reviewed builtin catalogue: a new
-   one fails the tests until someone decides whether it belongs here. Matched
-   on the whole command ([config nu]) or, for a bare name, its first word. *)
+(* Additional denied commands; [test_nu] pins the reviewed builtin catalogue so
+   new Nushell releases force an explicit decision here. *)
 let denied_commands =
   [
     ( "run",
@@ -266,8 +204,6 @@ let denied_commands =
     ( "run-internal",
       "it calls a builtin by a runtime name the gate cannot check. Call the \
        builtin by its literal name." );
-    (* No path in sight, so Layer 2's history-file pattern never fires, but
-       this reads the same file. *)
     ( "history",
       "shell history often holds pasted secrets. Ask the user for the command \
        instead." );
@@ -279,9 +215,8 @@ let denied_commands =
       "it runs the named program (with --help) outside the gate's view." );
   ]
 
-(* [%$cmd …] / [%(expr) …] is dynamic dispatch: the builtin is named at
-   runtime, so the whole call flattens to one token starting with [%]. (A
-   static [%print] flattens to plain [print].) *)
+(* [%$cmd] / [%(expr)] flattens to a single token starting with '%'; static
+   [%print] flattens to plain "print". *)
 let denied_command content =
   if starts_with ~prefix:"%" content then
     Some
@@ -296,27 +231,14 @@ let denied_command content =
     | Some d -> Some d
     | None -> named (first_word content)
 
-(* A [shape_internalcall] token: a builtin/command invocation, e.g. "ls", "http
-   get", "overlay use", "use". [rest] is the tokens after it, for `use`'s module
-   lookahead. Matched on the first word so subcommands (`http get`)
-   are covered. [modules]/[plugins] are the profile's vetted module and plugin
-   names. *)
 let check_internalcall ~modules ~plugins ~rest content =
   let content = unexported content in
   match denied_command content with
   | Some (name, reason) -> err_deny "`%s` is denied: %s" name reason
   | None -> check_command ~modules ~plugins ~rest content
 
-(* Walk the flat token stream, checking each token that carries a command
-   identity and short-circuiting on the first offender. Only three shapes
-   matter; every other shape (literals, pipes, closures delimiters, operators)
-   is inert and skipped. Because flatten emits closure/block bodies as ordinary
-   tokens, a call nested any depth deep is checked exactly like a top-level one. *)
-(* A garbage token straight after a bare command-group head ([polars], [str])
-   is an unknown subcommand: [polars scan-parquet] flattens to [polars]
-   (internalcall) then [scan-parquet] (garbage). Session data showed strong
-   models guessing polars names this way, then reading the generic syntax hint
-   as a variable-naming problem. *)
+(* Detect unknown subcommands like [polars scan-parquet], which flatten to
+   [shape_internalcall] followed by [shape_garbage]. *)
 let generic_garbage near =
   Fmt.str
     "the gate could not parse part of this script%s. That is usually a Nushell \
@@ -368,32 +290,17 @@ let rec walk ?prev ~externals ~modules ~plugins = function
             match token_content t with
             | Some content -> check_internalcall ~modules ~plugins ~rest content
             | None -> Ok ())
-        (* Anything nu's parser could not classify flattens to garbage: a
-           computed external head (`^$cmd`, `^$"(...)"`) the gate cannot
-           verify, but far more often a plain syntax error in the script —
-           a hyphenated positional parameter, a stray `$` on a custom-command
-           call, an unbalanced paren. Deny either way (never trust the runtime
-           PATH lock alone), but say where and steer to the common cause:
-           dogfooding showed agents burning whole runs treating their own
-           typos as gate policy. *)
         | Some "shape_garbage" -> garbage_reason ~prev t
         | _ -> Ok ()
       in
       walk ~prev:t ~externals ~modules ~plugins rest
 
-(* Environment variables a script may read but never set or hide:
-   - [OP_DEPTH] bounds op->nu->op recursion and [OP_HOST_PATH] carries the real
-     PATH a nested op restores (bin/main). Forging either resets the recursion
-     guard (a cost runaway) or points a nested op at planted binaries.
-   - [PATH] (nu's [Path] on Windows): the walk vets an external by name, so a
-     script that copies any binary to [./x/git] and puts [./x] on PATH runs it
-     as the allowed [git]. A nested op restores the host PATH itself, so
-     scripts have no need to set it. *)
+(* Env vars a script may read via [$env.NAME] but never set or hide: forging
+   OP_DEPTH/OP_HOST_PATH breaks recursion/PATH handshakes; rewriting PATH lets
+   any binary run under an allowlisted external's name. *)
 let protected_env = [ "OP_DEPTH"; "OP_HOST_PATH"; "PATH"; "Path" ]
 
-(* A name token strips to its bare name: nu reports a quoted name's [content]
-   with its quotes, so ["OP_DEPTH"], ['OP_DEPTH'], [`OP_DEPTH`] and a raw
-   string [r#'OP_DEPTH'#] all name the same variable. *)
+(* Strip single/double/backtick/raw quotes from nu string token content. *)
 let strip_quotes s =
   let n = String.length s in
   let quoted q = n >= 2 && s.[0] = q && s.[n - 1] = q in
@@ -406,8 +313,7 @@ let strip_quotes s =
 
 let assign_ops = [ "="; "+="; "-="; "*="; "/="; "++=" ]
 
-(* After [$env.NAME], skip cell-path members ([.0]) to the token that says
-   what happens to it: an assignment operator makes it a write. *)
+(* Skip cell-path segments ([.0]) after [$env.NAME] to check for assignment. *)
 let rec assigned = function
   | t :: rest
     when match token_shape t with
@@ -428,12 +334,8 @@ let env_read ~prev rest =
     | None -> false)
   && not (assigned rest)
 
-(* Deny a protected name anywhere but a plain read [$env.NAME]: a record or
-   list key ([with-env], [load-env]), an [insert]/[hide-env] argument, or
-   [$env.NAME = …]. One rule instead of a list of write forms; the price is
-   that [$env | get PATH] is refused too, and the deny steers to the read
-   form. A name computed at runtime ([$"OP_(x)"]) is no literal token and
-   escapes, as everything in Layer 2 does. *)
+(* Deny protected env names anywhere except a plain [$env.NAME] read (catches
+   assignments, [with-env]/[load-env] record keys, [hide-env], etc.). *)
 let check_env_writes tokens =
   let rec go prev = function
     | [] -> Ok ()
@@ -468,14 +370,10 @@ let analyze_tokens ~externals ~modules ~plugins ast =
       walk ~externals ~modules ~plugins tokens
   | _ -> Ok ()
 
-(* The published form: one reason string, whichever kind of refusal it was. *)
 let analyze_ast ~externals ~modules ~plugins ast =
   Result.map_error refusal_message
     (analyze_tokens ~externals ~modules ~plugins ast)
 
-(* The vetted-module names a clean token stream imports, for the vetting
-   recursion. Only names the walk already allowed can appear (anything else was
-   denied), so the membership filter is belt-and-braces. *)
 let used_modules ~modules ast =
   let rec collect = function
     | [] -> []
@@ -491,15 +389,9 @@ let used_modules ~modules ast =
   in
   match ast with `List tokens -> collect tokens | _ -> []
 
-(* A caret head applied to a variable or subexpression (`^$cmd`, `^(...)`,
-   `^$"..."`). When the variable is declared, flatten tags it [shape_variable]
-   — an inert shape the walk skips — so this must be caught in the source text.
-   (Only the *undeclared* case flattens to [shape_garbage].) A computed head
-   evades the name check entirely and, when it holds a path, the toolbox PATH
-   too. The caret must sit at a command position (start, or after
-   whitespace/pipe/semicolon/paren, or straight after a brace or bracket opening
-   a closure or list: [do {^$c}]): a regex anchor like [parse --regex
-   '^(\d+)'] has a quote before its caret and must not trip this. *)
+(* Catch computed external heads ([^$cmd], [^(...)]) in source text: flatten
+   tags a declared variable as inert [shape_variable]. Anchor to command
+   positions so regex anchors like ['^(\d+)'] do not match. *)
 let computed_head_re = Re.Perl.compile_pat {|(^|[\s|;({\[])\^[$(]|}
 
 let check_computed_head text =
@@ -510,10 +402,8 @@ let check_computed_head text =
        command by its bare name."
   else Ok ()
 
-(* Layer 2, reusing {!Gate}'s shared sensitive-path pattern. A `save` or
-   redirect whose target text is a dot-path is caught alongside the secret-path
-   names — nu builtins read/write files with no external call, so the AST walk
-   alone would pass them. *)
+(* Layer 2: dot-file writes via [save] or redirections, alongside
+   {!Gate.sensitive_path_re}. *)
 let save_dotfile_re =
   Re.Perl.compile_pat ~opts:[ `Caseless ]
     {|\bsave\b\s+(--?\w[\w-]*\s+)*('|"|)?(~/\.|\.[A-Za-z]|[^\s|;&'"]*/\.)|}
@@ -522,17 +412,11 @@ let redirect_dotfile_re =
   Re.Perl.compile_pat ~opts:[ `Caseless ]
     {|(\bo|\be|\bout|\berr|\bo\+e)?>>?\s*('|"|)?(~/\.|\.[A-Za-z]|[^\s|;&'"]*/\.)|}
 
-(* The text that tripped Layer 2, if any: quoted back in the deny so the model
-   (and the human reading the transcript) can see what matched. *)
 let sensitive_match text =
   List.find_map
     (fun re -> Option.map (fun g -> Re.Group.get g 0) (Re.exec_opt re text))
     [ Gate.sensitive_path_re; save_dotfile_re; redirect_dotfile_re ]
 
-(* Layer 1 over one source text: the deterministic checks shared by the
-   top-level script and each vetted module — computed-head text scan, AST
-   extraction, token walk — returning the clean stream's own module imports for
-   the vetting recursion. *)
 let analyze_source ~ast ~externals ~modules ~plugins text =
   let* () = check_computed_head text in
   match ast text with
@@ -545,9 +429,6 @@ let analyze_source ~ast ~externals ~modules ~plugins text =
       let* () = analyze_tokens ~externals ~modules ~plugins json in
       Ok (used_modules ~modules json)
 
-(* Layer 2 is a hard deny. There is no second opinion to ask and no
-   confirmation UI, so the message is the steering: it names the file to change
-   (the script, or the imported module) and the text that matched. *)
 let sensitive_advice =
   "secret-bearing paths and dot-file writes are denied in the nu tool. If the \
    task really needs that file, stop and tell the user."
@@ -567,18 +448,8 @@ let sensitive_verdict ~in_script ~sensitive_modules =
          (matched `%s`): %s"
         name hit sensitive_advice
 
-(* Vet the transitive closure of the [names]'d modules, each re-read from disk
-   for this call so the bytes Layer 1 audits are the bytes nu will parse. The
-   per-call [cache] memoises repeated imports and its in-progress [Ok ()]
-   placeholder guards mutually-importing modules. Returns the vetting result and
-   the modules that tripped Layer 2, each with the text that matched.
-
-   Layer 2 runs over module sources as well as the top-level script. Module dirs
-   are not the user-authored-only artifacts they read as: the nu tool can [save]
-   into them (they are non-dot paths, so [save_dotfile_re] does not fire), so a
-   script with no tool but [nu] can write a module and import it. Scanning only
-   the top level made the verdict depend on *where* a line of nu was written
-   rather than what it did. *)
+(* Recursively vet imported modules (Layer 1 + Layer 2). The in-progress
+   [Ok ()] cache placeholder handles mutual imports. *)
 let vet_modules ~analyze ~modules names =
   let cache : (string, (unit, refusal) result) Hashtbl.t = Hashtbl.create 8 in
   let sensitive = ref [] in
@@ -602,13 +473,9 @@ let vet_modules ~analyze ~modules names =
                  next call"
                 name
           | Some source when String.length source > max_script_chars ->
-              (* The anti-runaway bound is the top-level script's; a module is a
-                 script you import, so it obeys the same cap. Without this the
-                 gate feeds an unbounded module to `nu ast` — module dirs are
-                 run-writable, so the size is attacker-chosen. Production also
-                 skips oversized files before they are read (bin/main's
-                 [scan_module_sources]); this is the gate's own invariant, since
-                 [scan_modules] is injected and not trusted to bound its input. *)
+              (* Enforce the length cap here too (independent of
+                 {!Nu_sandbox.scan_module_sources}) since [scan_modules] is
+                 injected. *)
               err_deny
                 "module `%s` too long (%d chars > %d): the anti-runaway bound \
                  applies to modules too — split it into smaller modules"
@@ -625,8 +492,7 @@ let vet_modules ~analyze ~modules names =
         Hashtbl.replace cache name r;
         r
   in
-  (* [let]-sequence, not a tuple: a tuple evaluates right-to-left, sampling
-     [sensitive] before [vet_all] has populated it. *)
+  (* Sequence explicitly: OCaml tuple evaluation is right-to-left. *)
   let result = vet_all names in
   (result, !sensitive)
 

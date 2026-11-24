@@ -115,8 +115,6 @@ let%expect_test "one tool round trip" =
     assistant: done
     |}]
 
-(* A provider that reuses one id every turn (the baseten case). The loop keeps
-   the first sighting, rewrites the collision to a minted id, and warns once. *)
 let%expect_test "duplicate tool-call ids are repaired and warned once" =
   let dup text =
     turn ~text

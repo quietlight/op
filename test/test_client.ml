@@ -1,13 +1,3 @@
-(* Tests for Op.Client provider dispatch.
-
-   Client.call maps Config.api -> concrete adapter and forwards the [post]
-   closure. We exercise the routing with a fake [post] that records the request
-   URL/body and returns a canned, adapter-shaped response, then assert on which
-   adapter was reached:
-     - Anthropic posts to /v1/messages
-     - OpenAI posts to /chat/completions with a "tool_choice" field
-     - an unrecognized api string routes to the same OpenAI adapter *)
-
 let provider ~api : Op.Config.provider =
   {
     name = "p";
@@ -17,8 +7,7 @@ let provider ~api : Op.Config.provider =
     models = [];
   }
 
-(* One real tool, so the OpenAI-shaped bodies carry the "tool_choice" marker
-   the dispatch assertions look for (an empty tool set omits the field). *)
+(* Non-empty tool list so OpenAI-shaped bodies include "tool_choice". *)
 let fake_tool : Op.Tool.t =
   {
     name = "t";
@@ -27,7 +16,6 @@ let fake_tool : Op.Tool.t =
     run = (fun _ -> Op.Tool.text "");
   }
 
-(* Fake post recording the last request; always returns [response]. *)
 let call ~api ~response =
   let last_url = ref "" and last_body = ref "" in
   let post ~url ~headers ~body =

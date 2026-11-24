@@ -1,8 +1,5 @@
 open Test_support
 
-(* Resolve nu the same way main's toolbox walk will: first hit on PATH. The nu
-   tool is the whole point of this build, so — like the bash tests assume bash —
-   these assume nu 0.114 is installed. *)
 let nu_exe =
   let path = try Sys.getenv "PATH" with Not_found -> "" in
   String.split_on_char Op.Util.path_list_sep.[0] path
@@ -28,8 +25,6 @@ let test_nu_print () =
   | Ok (_, n) -> Alcotest.failf "expected exit 0, got %d" n
   | Error e -> Alcotest.fail (Op.Nu.pp_error e)
 
-(* Output well past the cap keeps its tail and reports the true total, which
-   only the streaming tail sink can know once it has dropped the head. *)
 let test_nu_output_tail () =
   match
     run {|1..20000 | each {|i| $"line ($i)"} | str join "\n" | print $in|}
@@ -45,7 +40,6 @@ let test_nu_output_tail () =
   | Error e -> Alcotest.fail (Op.Nu.pp_error e)
 
 let test_nu_pipeline () =
-  (* A structured pipeline: the substrate the persona actually uses. *)
   match run {|[1 2 3] | math sum|} with
   | Ok (out, 0) -> Alcotest.(check bool) "sums" true (contains out "6")
   | Ok (_, n) -> Alcotest.failf "expected exit 0, got %d" n
@@ -121,8 +115,6 @@ let test_nu_tool_zero_is_ok () =
         (contains msg "exit code: 0")
   | Error e -> Alcotest.fail e
 
-(* The description carries the allowed externals so the model learns the
-   contract; a missing name there is a silent capability regression. *)
 let test_nu_tool_description_lists_externals () =
   match nu_exe with
   | None -> Alcotest.fail "nu not found on PATH"
@@ -139,8 +131,6 @@ let test_nu_tool_description_lists_externals () =
         "lists skraak" true
         (contains tool.Op.Tool.description "skraak")
 
-(* The ast runner underpins Gate_nu: it must return real JSON for a valid
-   script (so the walk has something to inspect) and an Error for a broken one. *)
 let ast script =
   match nu_exe with
   | None -> Alcotest.fail "nu not found on PATH"
@@ -153,7 +143,6 @@ let ast script =
 let test_nu_ast_valid_json () =
   match ast {|curl https://example.com|} with
   | Ok json ->
-      (* The AST of an external call must reach Gate_nu's walk unchanged. *)
       Alcotest.(check string)
         "walk denies the external" "deny"
         (match
@@ -164,10 +153,6 @@ let test_nu_ast_valid_json () =
         | Error _ -> "deny")
   | Error e -> Alcotest.failf "expected AST JSON, got error: %s" e
 
-(* End-to-end through a real nu subprocess: a denied builtin hidden in a closure
-   must still be denied. This is the load-bearing case the flatten switch exists
-   to close — with the old `get block` runner the closure body was an opaque
-   block-id and this script sailed through. *)
 let test_nu_ast_denies_closure_http () =
   match ast {|[1 2] | each { http get https://example.com }|} with
   | Ok json ->
@@ -181,11 +166,6 @@ let test_nu_ast_denies_closure_http () =
         | Error _ -> "deny")
   | Error e -> Alcotest.failf "expected AST JSON, got error: %s" e
 
-(* [pathMode] lives entirely in bin/main.ml's [child_path] construction
-   (toolbox_dir, or toolbox_dir ^ ":" ^ host_path), which has no test seam of
-   its own. Reproduce it here against a real nu subprocess via [Op.Nu.run] —
-   the same primitive main.ml calls — so the test exercises the actual
-   PATH-resolution behavior the setting exists for, not just a string. *)
 let run_with_path ~path script =
   match nu_exe with
   | None -> Alcotest.fail "nu not found on PATH"
@@ -202,9 +182,6 @@ let run_with_path ~path script =
         ~clock:(Eio.Stdenv.clock eenv) ~env ~executable ~script ()
 
 let test_nu_path_mode_toolbox_only_hides_host_command () =
-  (* A "dev"-style probe binary that lives only on the host PATH, never in the
-     toolbox dir — standing in for `gcc` being invisible to a `make` symlinked
-     into an empty toolbox. *)
   with_temp_dir (fun toolbox_dir ->
       with_temp_dir (fun host_dir ->
           let probe = Filename.concat host_dir "op-test-probe" in
@@ -224,8 +201,6 @@ let test_nu_path_mode_host_appends_host_path () =
           let probe = Filename.concat host_dir "op-test-probe" in
           write_file probe "#!/bin/sh\nprintf 'PROBE-OK'\n";
           Unix.chmod probe 0o755;
-          (* toolbox_dir ^ ":" ^ host_dir, exactly as bin/main.ml builds
-             [child_path] for a [pathMode: host] profile. *)
           match
             run_with_path
               ~path:(toolbox_dir ^ Op.Util.path_list_sep ^ host_dir)
@@ -238,10 +213,6 @@ let test_nu_path_mode_host_appends_host_path () =
           | Ok (_, n) -> Alcotest.failf "expected exit 0, got %d" n
           | Error e -> Alcotest.fail (Op.Nu.pp_error e)))
 
-(* The child env is built by replacing same-named entries, never appending a
-   duplicate: execve leaves duplicate NAME= handling to the consumer (nu takes
-   the last, C getenv the first), so a stray inherited OP_AST_FILE must not
-   survive alongside the intended one. *)
 let test_env_with_replaces_not_appends () =
   Unix.putenv "OP_AST_FILE" "/tmp/STALE";
   let env = Op.Nu.For_testing.env_with [ ("OP_AST_FILE", "/tmp/INTENDED") ] in
@@ -295,13 +266,9 @@ let test_plugin_note_describes_commands () =
     "no plugins, no note" ""
     (Op.Nu.For_testing.plugin_note None)
 
-(* The gate denies by name, and Nushell grows builtins between releases (run,
-   run-internal and % dispatch arrived after 0.114, each a way past the gate).
-   So the reviewed catalogue is pinned: a builtin the installed nu has and the
-   snapshot lacks fails here until someone checks whether it runs programs,
-   loads files or reaches the network (deny it in Gate_nu if so), then adds
-   it to fixtures/nu/builtins.txt. Builtins the snapshot has and nu lacks are
-   fine: an older nu. *)
+(* Pin the reviewed Nushell builtin catalogue: fail when an upgraded [nu] adds
+   a builtin not in [fixtures/nu/builtins.txt] until it is audited against
+   [Gate_nu] and added. Older [nu] versions missing snapshot entries pass. *)
 let test_nu_builtins_reviewed () =
   let reviewed =
     Test_support.read_file "fixtures/nu/builtins.txt"

@@ -1,16 +1,4 @@
-(* The [nu] tool: run a Nushell script under a locked-down toolbox PATH, with a
-   timeout, tail-truncation of long output, empty stdin, and non-zero exit ->
-   Error. The script is a tool *parameter* (never a shell-quoted string),
-   written to a temp file and run with [nu --no-config-file]; the child is
-   spawned with a caller-supplied [env] (the toolbox PATH plus the OP_HOST_PATH
-   handshake) and [executable] (nu's absolute path, since nu itself is not in
-   the toolbox PATH). The static AST gate (Gate_nu) vets the script before this
-   ever runs. *)
-
 let default_timeout = 120.0
-
-(* The model picks its own timeout, so it needs a ceiling as well as a
-   default: a hung loop should not hold the run (or the machine) for hours. *)
 let max_timeout = 600
 let max_output_bytes = 30_000
 
@@ -26,13 +14,9 @@ type plugins = {
 
 type error = Spawn_error of string | Timeout of float * string
 
-(* The flags shared by the run and AST invocations, so the parser state the
-   gate inspects matches the one the script executes under. [--table-mode none]
-   forces borderless tables so nu's rounded-box output stays readable in the
-   transcript. [--no-config-file] hard-disables the plugin registry (nu 0.114),
-   so a plugin-bearing profile swaps it for empty op-managed config stubs plus
-   [--plugin-config]; [--include-path] makes [use <module>] resolve at parse
-   time in both. *)
+(* Shared by [run] and [ast] so gated parser state matches execution.
+   [--no-config-file] disables plugins, so plugin profiles use empty config
+   stubs + [--plugin-config]. *)
 let base_flags ?modules ?plugins () =
   [ "--table-mode"; "none" ]
   @ (match plugins with
@@ -53,22 +37,10 @@ let base_flags ?modules ?plugins () =
 
 let err fmt = Fmt.kstr (fun s -> Error s) fmt
 
-(* The env the [ast] and [register_plugin] helpers hand their nu subprocess: an
-   *allowlist* of op's own environment plus the caller's [overrides]. Same
-   discipline as bin/main's [nu_child_env] — an inherited ANTHROPIC_API_KEY must
-   not reach these subprocesses either. [ast] only parses, but [register_plugin]
-   *executes* the plugin binary (`plugin add` runs it to collect signatures), so
-   a leaked key would be handed to a program op spawns. The set is the small
-   neutral one nu needs to start (locale, home, temp) plus PATH (op's real host
-   PATH — not a secret — so a plugin's own child processes still resolve).
-   Anything else, including a stray inherited OP_AST_FILE, is dropped.
-
-   Allowlist also gives the replace-not-append property for free: execve does
-   not dedup, and a duplicate NAME= is read last-wins by nu but first-wins by C
-   getenv, so a stray inherited copy of an override name must not survive
-   alongside the intended one. Filtering the inherited set to names not in
-   [overrides] (none of the OP_* overrides are allowlisted anyway) keeps exactly
-   one entry per name. *)
+(* Allowlisted env for [ast]/[register_plugin]/[plugin_commands] (same
+   discipline as {!Nu_sandbox.child_env} so API keys never leak to plugin
+   binaries). Replaces matching names rather than appending because nu and C
+   [getenv] disagree on duplicate entries. *)
 let ast_env_allow =
   [
     "HOME"; "USER"; "LOGNAME"; "LANG"; "LC_ALL"; "TERM"; "TMPDIR"; "TZ"; "PATH";
@@ -94,11 +66,8 @@ let pp_error = function
       else
         Fmt.str "nu script timed out after %.0fs\nPartial output:\n%s" t output
 
-(* The output sink keeps only the tail — nu's span-pointed errors land at the
-   end — and keeps it while the script runs, so a script printing gigabytes
-   costs at most twice [max_output_bytes] of memory: past that the buffer is
-   cut back to its last [max_output_bytes]. [total] counts every byte written,
-   for the truncation note. *)
+(* Bounded tail sink (<= 2 * max_output_bytes in memory); nu errors land at the
+   end. *)
 module Tail = struct
   type t = { buf : Buffer.t; mutable total : int }
 
@@ -131,11 +100,7 @@ let truncate_output (t : Tail.t) =
       t.total
       (String.sub s (n - kept) kept)
 
-(* Spawn nu, await it, and capture output to the given sinks. Empty stdin
-   (immediate EOF), same rationale as bash: a script that reads stdin fails fast
-   instead of blocking to the timeout. [?env] (when given) carries the toolbox
-   PATH; [~executable] is nu's absolute path because the toolbox PATH
-   deliberately excludes nu itself. *)
+(* Empty stdin gives immediate EOF so scripts reading stdin fail fast. *)
 let spawn_capture ~proc_mgr ~clock ~timeout ?env ~executable ~stdout ~stderr
     args =
   try
@@ -153,8 +118,6 @@ let spawn_capture ~proc_mgr ~clock ~timeout ?env ~executable ~stdout ~stderr
 
 let run ~proc_mgr ~clock ?(timeout = default_timeout) ?modules ?plugins ~env
     ~executable ~script () =
-  (* Write the script to a temp file so nu parses a real file (no shell quoting,
-     no argv length limits) and so --no-config-file can pin the command set. *)
   let tmp = Filename.temp_file "op-nu" ".nu" in
   Fun.protect
     ~finally:(fun () -> try Sys.remove tmp with Sys_error _ -> ())
@@ -177,19 +140,8 @@ let run ~proc_mgr ~clock ?(timeout = default_timeout) ?modules ?plugins ~env
 
 let ast_timeout = 30.0
 
-(* Obtain the AST of [script] as JSON, for Gate_nu's static walk. Runs
-   [nu --no-config-file -c 'ast (open --raw "<tmp>") --json --flatten'] with the
-   script in a temp file (never embedded in the -c string — quoting), and
-   captures stdout separately from stderr so nu's span-pointed parse errors are
-   returned verbatim on failure. Uses only nu builtins, so it needs no toolbox
-   env. This is the [ast] closure Gate_nu is parameterised over.
-
-   [--flatten] (not [| get block]) is load-bearing: [get block] serializes only
-   the top frame, encoding every closure/block body as a bare integer block-id,
-   so commands nested in [each { }], [do { }], [if { }], [def f [] { }] never
-   appear as walkable nodes. [--flatten] emits the whole script — nested bodies
-   included — as a flat token stream tagged with shapes ([shape_external],
-   [shape_internalcall], ...), which is what Gate_nu's walk consumes. *)
+(* Extract flattened JSON token stream via [--flatten] (so nested closure/block
+   bodies are emitted as walkable tokens, unlike [get block]). *)
 let ast ~proc_mgr ~clock ?modules ?plugins ~executable script =
   let tmp = Filename.temp_file "op-nu-ast" ".nu" in
   Fun.protect
@@ -198,11 +150,7 @@ let ast ~proc_mgr ~clock ?modules ?plugins ~executable script =
       Out_channel.with_open_bin tmp (fun oc ->
           Out_channel.output_string oc script);
       let out = Buffer.create 4096 and errbuf = Buffer.create 256 in
-      (* The path travels in the environment, not spliced into the source: a
-         TMPDIR containing a quote would otherwise close the string literal and
-         inject nu code into the gate's own helper. Nothing here is
-         interpolated. [env_with] replaces rather than appends so a duplicate
-         entry cannot decide which file nu opens. *)
+      (* Pass path via env rather than interpolating into [-c] source. *)
       let command = {|ast (open --raw $env.OP_AST_FILE) --json --flatten|} in
       let env = env_with [ ("OP_AST_FILE", tmp) ] in
       let status =
@@ -223,16 +171,9 @@ let ast ~proc_mgr ~clock ?modules ?plugins ~executable script =
       | Error `Timeout -> Error "nu ast timed out"
       | Error (`Spawn msg) -> Error ("failed to run nu: " ^ msg))
 
-(* Register [binary] into the op-managed [registry] (creating it if absent) via
-   nu's [plugin add], which executes the binary to collect its command
-   signatures — so this runs only for profile-listed plugins. The per-command
-   [--plugin-config] flag is the one form nu 0.114 honours under
-   [--no-config-file]. *)
 let register_plugin ~proc_mgr ~clock ~executable ~registry ~binary =
   let out = Buffer.create 256 in
   let sink = Eio.Flow.buffer_sink out in
-  (* Same rule as [ast]: paths ride in the environment rather than being
-     interpolated into nu source. *)
   let command =
     {|plugin add --plugin-config $env.OP_PLUGIN_REGISTRY $env.OP_PLUGIN_BINARY|}
   in
@@ -250,9 +191,6 @@ let register_plugin ~proc_mgr ~clock ~executable ~registry ~binary =
   | Error `Timeout -> err "plugin add %s timed out" binary
   | Error (`Spawn msg) -> err "plugin add %s: %s" binary msg
 
-(* nu's own version ("0.117.1"), for the tool description: the model writes
-   better nu when it knows which nu. [None] when the probe fails; the
-   description then simply omits it. *)
 let version ~proc_mgr ~clock ~executable =
   let out = Buffer.create 32 in
   match
@@ -265,9 +203,6 @@ let version ~proc_mgr ~clock ~executable =
       match String.trim (Buffer.contents out) with "" -> None | v -> Some v)
   | Ok _ | Error _ -> None
 
-(* [plugin list] output: [{name, commands: [{name, description}]}]. Entries
-   that do not have that shape are skipped rather than failing the run: the
-   catalog only feeds the tool description. *)
 let command_of_json = function
   | `Assoc fields -> (
       match
@@ -289,8 +224,6 @@ let plugin_of_json = function
       | _ -> None)
   | _ -> None
 
-(* Read the registry's catalog. [plugin list] decodes the registry file; it
-   does not run any plugin binary. Path via the environment, as in [ast]. *)
 let plugin_commands ~proc_mgr ~clock ~executable ~registry =
   let out = Buffer.create 4096 and errbuf = Buffer.create 256 in
   let command =
@@ -313,13 +246,9 @@ let plugin_commands ~proc_mgr ~clock ~executable ~registry =
   | Error `Timeout -> err "plugin list timed out"
   | Error (`Spawn msg) -> err "plugin list: %s" msg
 
-(* Subcommands are listed with their summaries up to this many, so the model
-   can pick the right one without a [help] round trip; past it (polars has
-   ~200) the note gives a count and points at [help <plugin>]. *)
+(* Inline up to this many subcommands; larger plugins (e.g. polars) show a count. *)
 let max_listed_commands = 8
 
-(* One plugin's line: its main command's description (the command named
-   after the plugin, when there is one) and its other commands. *)
 let plugin_line ~commands name =
   let cmds = Option.value ~default:[] (List.assoc_opt name commands) in
   let main, rest = List.partition (fun c -> c.command = name) cmds in

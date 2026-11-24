@@ -1,8 +1,3 @@
-(* Tests for Op.Nu_sandbox: the pieces of the nu runtime with a security job
-   of their own — the child environment allowlist, the [which] walk that
-   decides what gets linked or executed, the module scanner, and the
-   per-profile plugin registry path. None of them spawns nu. *)
-
 module S = Op.Nu_sandbox
 
 let child_env ?(env_allow = []) host_env =
@@ -19,8 +14,6 @@ let names env =
       Option.map (fun i -> String.sub kv 0 i) (String.index_opt kv '='))
     env
 
-(* The reason the env is an allowlist: a credential the host happens to hold
-   must not be one `$env` read away from the tool result. *)
 let test_child_env_drops_credentials () =
   let env =
     child_env
@@ -43,7 +36,6 @@ let test_child_env_drops_credentials () =
   Alcotest.(check bool) "host PATH dropped" false (has env "PATH=/host/bin");
   Alcotest.(check bool) "PATH is the toolbox" true (has env "PATH=/tmp/toolbox")
 
-(* Names match whole, not by prefix: HOME must not admit HOMEBREW_PREFIX. *)
 let test_child_env_matches_whole_names () =
   let env =
     child_env [| "HOMEBREW_PREFIX=/opt"; "TERMINFO=/x"; "malformed" |]
@@ -79,9 +71,6 @@ let test_child_env_handshake () =
     (List.length (List.sort_uniq String.compare ns))
     (List.length ns)
 
-(* [which] must return something safe to symlink into the toolbox or execute
-   as a plugin: a directory or a non-executable file of the right name is not
-   the tool. *)
 let test_which () =
   Test_support.with_temp_dir @@ fun root ->
   let dir name =
@@ -130,7 +119,6 @@ let test_scan_module_sources () =
   Alcotest.(check bool)
     "the oversized module is warned about" true
     (List.exists (fun m -> Test_support.contains m "huge.nu") !warnings);
-  (* Rescanned on every call: a module written mid-run is seen next time. *)
   Test_support.write_file (Filename.concat first "c.nu") "C";
   Alcotest.(check bool)
     "new module appears" true
@@ -141,8 +129,6 @@ let test_registry_path () =
   Alcotest.(check bool) "one per profile" true (p "data" <> p "dev");
   Alcotest.(check string)
     "named for it" "/agent/nu-plugin-data.msgpackz" (p "data");
-  (* A name that needs flattening stays inside the agent dir, and does not
-     collide with the profile whose name is the flattened form. *)
   let hostile = p "../../etc/x" in
   Alcotest.(check string)
     "stays in the agent dir" "/agent" (Filename.dirname hostile);

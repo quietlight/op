@@ -1,5 +1,3 @@
-(* Tests for Op.Agent *)
-
 open Test_support
 
 let turn ?(text = "") ?(thinking = None) ?(usage = None) tool_calls :
@@ -9,7 +7,6 @@ let turn ?(text = "") ?(thinking = None) ?(usage = None) tool_calls :
 let tool_call ?(args = `Assoc []) ~id ~name () : Op.Llm.tool_call =
   { id; name; arguments = args }
 
-(* A fake model that replays a fixed list of turns; once exhausted it ends. *)
 let scripted turns =
   let remaining = ref turns in
   fun ~messages:_ ->
@@ -125,9 +122,6 @@ let test_agent_tool_error_preserved () =
       Alcotest.(check bool) "tool error preserved" true preserved
 
 let test_agent_tool_exception_caught () =
-  (* A tool that raises an exception (e.g. Yojson Type_error from non-object
-     arguments) should be caught and turned into an is_error result, not crash
-     the agent loop. *)
   let tool =
     fake_tool ~name:"crashy" ~result:(fun _ ->
         ignore (Yojson.Safe.Util.member "x" (`String "not an object"));
@@ -158,7 +152,6 @@ let test_agent_tool_exception_caught () =
 
 let test_agent_max_steps () =
   let tool = fake_tool ~name:"echo" ~result:(fun _ -> Op.Tool.text "out") in
-  (* A model that always asks for a tool would loop forever without the cap. *)
   let call ~messages:_ = Ok (turn [ tool_call ~id:"1" ~name:"echo" () ]) in
   match
     Op.Agent.run ~call ~tools:[ tool ] ~emit:no_emit ~max_steps:2
@@ -171,12 +164,9 @@ let test_agent_max_steps () =
         "max_steps reached" true
         (match outcome with Op.Agent.Max_steps_reached -> true | _ -> false)
 
-(* The context cap is tested between turns, so the history it hands back is
-   wire-valid: the last assistant turn's tool calls are all answered. *)
 let test_agent_context_limit () =
   let tool = fake_tool ~name:"echo" ~result:(fun _ -> Op.Tool.text "out") in
   let call ~messages:_ = Ok (turn [ tool_call ~id:"1" ~name:"echo" () ]) in
-  (* "Full" after two assistant turns, whatever the turns actually cost. *)
   let over_context history =
     List.length
       (List.filter (function Op.Llm.Assistant _ -> true | _ -> false) history)
@@ -210,7 +200,6 @@ let test_agent_context_limit () =
       Alcotest.(check int)
         "every tool call answered" (List.length calls) (List.length answered)
 
-(* With no predicate the loop is exactly as it was: nothing stops it early. *)
 let test_agent_no_context_limit_by_default () =
   let call = scripted [ turn ~text:"done" [] ] in
   match
@@ -272,7 +261,6 @@ let test_system_prompt () =
     (contains Op.Agent.default_system);
   Alcotest.(check bool) "mentions the nu tool" true (contains "nu tool")
 
-(* Without nu the prompt offers no execution capability at all. *)
 let test_system_prompt_no_exec () =
   let prompt =
     Op.Agent.system_prompt ~cwd:"/w" ~date:"2024-01-02"
@@ -285,11 +273,8 @@ let test_system_prompt_no_exec () =
     "still describes file tools" true
     (has_sub ~needle:"read" prompt)
 
-(* --- tool-call id uniqueness --- *)
-
 let echo_tool = fake_tool ~name:"echo" ~result:(fun _ -> Op.Tool.text "out")
 
-(* The tool-call ids of every assistant turn in [history], in order. *)
 let call_ids history =
   List.concat_map
     (function
@@ -305,8 +290,6 @@ let result_ids history =
 
 let distinct xs = List.length (List.sort_uniq compare xs) = List.length xs
 
-(* Run a scripted model and return the history plus how many times the loop
-   warned that it repaired ids. *)
 let run_ids ?(messages = [ Op.Llm.user "hi" ]) turns =
   let repaired = ref 0 in
   let emit = function Op.Agent.Tool_ids_repaired -> incr repaired | _ -> () in
@@ -316,8 +299,6 @@ let run_ids ?(messages = [ Op.Llm.user "hi" ]) turns =
   | Error e -> Alcotest.fail e
   | Ok (history, _) -> (history, !repaired)
 
-(* The baseten shape: every turn reuses one id. Across turns the ids must be made
-   distinct, and each tool result still matches its (rewritten) call. *)
 let test_ids_cross_turn_duplicates () =
   let dup () = turn [ tool_call ~id:"functions.bash:0" ~name:"echo" () ] in
   let history, repaired = run_ids [ dup (); dup (); turn ~text:"done" [] ] in
@@ -370,8 +351,6 @@ let test_ids_clean_preserved () =
     "unique provider ids untouched" [ "call_a"; "call_b" ] (call_ids history);
   Alcotest.(check int) "no repair" 0 repaired
 
-(* On resume, a new turn that reuses an id already in the loaded history is
-   repaired: [seen] is seeded from [messages]. *)
 let test_ids_resume_seeding () =
   let prior =
     [
@@ -391,7 +370,6 @@ let test_ids_resume_seeding () =
     run_ids ~messages:prior
       [ turn [ tool_call ~id:"x" ~name:"echo" () ]; turn ~text:"done" [] ]
   in
-  (* call_ids spans the loaded "x" plus the new turn's (rewritten) id. *)
   (match call_ids history with
   | [ "x"; fresh ] ->
       Alcotest.(check bool) "new id rewritten" true (fresh <> "x")
@@ -399,10 +377,6 @@ let test_ids_resume_seeding () =
       Alcotest.failf "unexpected call ids: [%s]" (String.concat "; " other));
   Alcotest.(check int) "warned once" 1 repaired
 
-(* --- gate integration --- *)
-
-(* A Deny does not run the tool but produces an is_error result the model can
-   read; the loop keeps going to a final answer. *)
 let test_gate_deny_continues () =
   let ran = ref false in
   let tool =
@@ -440,7 +414,6 @@ let test_gate_deny_continues () =
         "finished normally" true
         (match outcome with Op.Agent.Finished -> true | _ -> false)
 
-(* A Warn runs the tool and appends the steering note to its result. *)
 let test_gate_warn_appends () =
   let tool = fake_tool ~name:"echo" ~result:(fun _ -> Op.Tool.text "out") in
   let call =
@@ -464,8 +437,6 @@ let test_gate_warn_appends () =
              | _ -> false)
            history)
 
-(* A Code_red answers every pending call in the turn with an error and stops,
-   leaving no unanswered tool calls in the history. *)
 let test_gate_code_red_kills () =
   let ran = ref false in
   let tool =
@@ -497,7 +468,6 @@ let test_gate_code_red_kills () =
         (match outcome with
         | Op.Agent.Gate_killed m -> m = "hostile"
         | _ -> false);
-      (* every requested call has a matching, error-carrying result *)
       Alcotest.(check (list string))
         "every pending call answered" (call_ids history) (result_ids history);
       Alcotest.(check bool)
@@ -515,9 +485,6 @@ let test_gate_code_red_kills () =
              | Op.Llm.Assistant a -> a.text = "never reached" | _ -> false)
            history)
 
-(* The details a tool returns must reach the session log, and the only path
-   there is dispatch → Tool_finished. Use a fake tool that returns details so
-   this generic seam remains covered even though no built-in currently does. *)
 let test_tool_details_survive_dispatch () =
   let details = `Assoc [ ("nextId", `Int 3) ] in
   let tool =
@@ -548,10 +515,6 @@ let test_tool_details_survive_dispatch () =
       in
       Alcotest.(check bool) "details in history" true in_history
 
-(* The other half of the contract: details are session-only. A tool result with
-   details must serialize to the wire exactly as one without — pi does not send
-   them to the model either, and leaking them would put unreviewed tool state
-   into the prompt. *)
 let test_details_never_reach_the_wire () =
   let with_details : Op.Llm.message =
     Tool

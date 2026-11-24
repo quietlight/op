@@ -1,7 +1,7 @@
 ---
 description: How to actually get things done in op's gated Nushell env — builtins over Unix tools, capturing output, common gotchas
 ---
-**PLEASE EDIT THIS IF YOU FIND HOLES: KEEP IT TERSE, USEFUL**
+Keep this playbook terse and update it when the gated environment changes.
 
 You are operating in op's `nu` tool: a Nushell script vetted by a static gate
 before it runs, under a toolbox PATH that contains **only** a few allowed
@@ -28,9 +28,8 @@ almost everything you'd shell out for:
 | `sed`/`awk`        | `str replace`, `each { ... }`, `parse "..."`               |
 | `curl`/`http`      | nested `op --json "prompt" \| from json` (op is toolbox)   |
 
-`op` is itself a toolbox external: a one-shot agentic subagent. `--json` makes
-it emit a single result object on stdout (instead of the default entry
-stream) — parse with
+`op` is itself a toolbox external: a one-shot agentic subagent. `--json` emits
+a single result object on stdout (instead of the human transcript) — parse with
 `from json` and read `.answer`. Run `op --help` for the full surface (sessions,
 `--max-steps`, `--tools`, `--model`, `--profile`).
 
@@ -125,10 +124,9 @@ parse explicitly.
 
 **`enumerate` inside nested closures is fragile.** `$r.index` / `$r.item` can
 resolve against the wrong scope and throw `CantFindColumn` / `DidYouMean` when
-you nest closures (e.g. an `each` inside a `where`). Don't fight it — flatten the
-pipeline (do the `enumerate`/filter at one level, bind the row to an explicit
-closure param `{|r| ...}`, or capture the needed field into a `let` before
-nesting). This is a real time-sink if you try to diagnose it in place.
+you nest closures (e.g. an `each` inside a `where`). Flatten the pipeline (do
+the `enumerate`/filter at one level, bind the row to an explicit closure param
+`{|r| ...}`, or capture the needed field into a `let` before nesting).
 
 A grep-across-files reflex becomes a Nushell pipeline — sweep with `ls`, not
 `glob`: `ls **/*` skips dotfiles, `glob "**/*"` happily returns `.env`:
@@ -244,8 +242,7 @@ To list the real names, run
 
 The gate parses the script **before** nu runs it, so a Nushell syntax error
 surfaces as a gate block ("the gate could not parse part of this script …")
-and you never see nu's own parse diagnostic. Don't rewrite working constructs
-to appease it — find the typo. Causes seen in real runs, all agent typos:
+without nu's own parse diagnostic. Common causes:
 
 - **Hyphenated positional params are invalid nu.** `def f [show-detail: bool]`
   doesn't parse — flags auto-underscore (`--show-detail` → `$show_detail`),
@@ -268,7 +265,7 @@ Related denial shapes that look like gate bugs but aren't:
 `print (glob "*" | first 3)` and other parenthesized pipelines as arguments
 pass the gate fine — no need to let-bind first.
 
-## Gotchas seen while dogfooding
+## Common gotchas
 
 - `open CLAUDE.md | lines` → `only_supports_this_input_type`. Fix: `open --raw`.
 - `... | where item.content =~ ...` → `IncompatiblePathAccess`. After

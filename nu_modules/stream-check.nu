@@ -4,13 +4,11 @@
 # This check costs one cheap LLM call; pass --model to pick a specific
 # provider/model instead of the configured default.
 
-# One check row.
 def row [name: string, ok: bool, note: string = ""] {
     { check: $name, ok: $ok, note: $note }
 }
 
-# Run op with [args]; parse stdout as jsonl. Lines that fail to parse are
-# kept as {raw: line} so the "all lines parse" check can count them.
+# Run op with [args] and parse stdout as jsonl; unparseable lines become {raw}.
 def run-op [args: list<string>] {
     let out = (^op ...$args | complete)
     let entries = ($out.stdout | lines
@@ -19,7 +17,6 @@ def run-op [args: list<string>] {
     { exit: $out.exit_code, entries: $entries }
 }
 
-# The message records among stream entries.
 def messages [entries] {
     $entries
     | where {|e| ($e | get -o type) == "message"}

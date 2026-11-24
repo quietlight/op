@@ -1,27 +1,20 @@
-(** Loading and validating [--image] attachments into neutral content blocks.
+(** Loading and validating [--image] attachments into {!Llm.Image} blocks.
 
-    Each image is read as raw bytes, its media type sniffed from the magic bytes
-    (never the extension), size-checked against {!max_bytes}, and base64-encoded
-    into an {!Llm.Image} block. op does no decoding or resizing. *)
+    Sniffs media type from magic bytes, enforces size caps, and base64-encodes
+    without decoding or resizing. *)
 
 val max_bytes : int
-(** Per-image raw-byte cap (5 MB); a load exceeding it is rejected. *)
+(** Per-image raw-byte cap (5 MB). *)
 
 val base64_encode : string -> string
-(** [base64_encode s] is [s] in standard padded base64. *)
+(** [base64_encode s] encodes [s] as standard padded base64. *)
 
 val media_type_of_bytes : string -> string option
-(** [media_type_of_bytes s] sniffs the IANA media type from the leading magic
-    bytes of [s], or [None] for a format outside the accepted set (png, jpeg,
-    webp, gif — Anthropic's set). *)
+(** [media_type_of_bytes s] sniffs PNG, JPEG, WebP, or GIF from magic bytes. *)
 
 val load : string -> (Llm.content_block, string) result
-(** [load path] reads the file at [path] and returns an {!Llm.Image} block, or
-    an [Error] with a clear message when the file is missing, empty, over
-    {!max_bytes}, or not a supported image format. *)
+(** [load path] reads, validates, and base64-encodes one image file. *)
 
 val load_all : string list -> (Llm.content_block list, string) result
-(** [load_all paths] loads every path in order (attachment order is semantic),
-    failing on the first error. Also bounds the run as a whole — at most 5
-    images, and 20 MB of encoded payload across them — since [--image] is
-    repeatable and the per-image cap alone bounds nothing. *)
+(** [load_all paths] loads images in order, capping a run at 5 images and 20 MB
+    of total encoded payload. *)

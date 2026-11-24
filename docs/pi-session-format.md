@@ -1,4 +1,4 @@
-# pi session format
+# Session format
 
 op logs every run as a session file in the same jsonl format pi uses, so the
 two tools can read each other's sessions. This document describes the format
@@ -142,8 +142,8 @@ Known simplifications, all schema-valid:
   `stop` otherwise (`length` / `error` / `aborted` are never produced).
 - Assistant messages carry a `thinking` block (with `thinkingSignature`)
   when the provider returned reasoning; `responseId` and `diagnostics` are
-  never written. `details` on tool results is currently written by no built-in
-  tool. Historical op sessions and pi's `examples/extensions/todo.ts` may carry
+  never written. Built-in tools do not currently write `details` on tool
+  results. Historical op sessions and pi's `examples/extensions/todo.ts` may carry
   a todo state snapshot there (`{action, todos, nextId, error?}`); op continues
   to parse and preserve the optional pi-format field.
 - Compaction, branch summaries, labels, and session naming are not
@@ -155,17 +155,14 @@ Known simplifications, all schema-valid:
 
 ## The live stream (`--stream`)
 
-Under `--stream` op writes the very lines described above to **stdout** as they
-are appended to the session file, one JSON object per line. The stream *is* this
-format: a consumer that can render a session file
-can render a live run with no extra vocabulary (unlike pi's `--mode json`, which
-defines a separate agent-event model). This is what `hop` reads.
+Under `--stream` op writes these lines to **stdout** as they are appended to
+the session file, one JSON object per line. Because the stream uses the same
+format, any consumer that renders a session file can render a live run with no
+extra vocabulary (unlike pi's `--mode json`, which defines a separate
+agent-event model). This is what `hop` reads.
 
-op's *default* stdout is not this — it is the human transcript that
-`lib/render.ml` produces from these same entries, entry by entry as they are
-written (`--json` is the third mode: the result envelope alone). All three views
-are the same run through the same sink; only the formatting differs, so nothing
-in this document changes with the flag.
+Default stdout is the human transcript rendered from these entries by
+`lib/render.ml`; `--json` emits only the result envelope.
 
 - A fresh run streams the `session` header first, then every entry.
 - A resumed run streams only its new entries — starting with the

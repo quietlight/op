@@ -1,9 +1,8 @@
-(** Session resume and branch-point resolution for prompt runs. *)
+(** Session resume and branch-point resolution. *)
 
 val path_of : cwd:string -> session_id:string -> (string, string) result
-(** [path_of ~cwd ~session_id] Path of [session_id]'s file under [cwd]'s session
-    directory. This is what a fresh session records as its [parentSession] when
-    [--fromSession] forks off a finished thread. *)
+(** [path_of ~cwd ~session_id] resolves [session_id]'s file path under [cwd]'s
+    session directory. *)
 
 val load :
   cwd:string ->
@@ -12,10 +11,8 @@ val load :
   unit ->
   (string * Llm.message list, string) result
 (** [load ~cwd ~session_id ~parent_id ()] is the read-only half of {!resume}:
-    the same leaf selection and branch-point correction, returning the session's
-    path and history without opening the file for appending. Used by
-    [--handoff], which must not write to the session it summarises. The leaf
-    correction is not reported, since nothing is appended to the branch. *)
+    selects and corrects the leaf, returning the path and history without
+    opening the file for appending (used by [--handoff]). *)
 
 val resume :
   ?sink:(Yojson.Safe.t -> unit) ->
@@ -27,8 +24,5 @@ val resume :
   unit ->
   (Session.t * Llm.message list * (string * string) option, string) result
 (** [resume ?sink ~cwd ~session_id ~parent_id ~provider ~model ()] opens a prior
-    session (located under [cwd]'s session directory), resolves the effective
-    branch point, appends the model-change entry, and returns the resumed
-    session, prior history, and optional [(requested, effective)] branch
-    correction. [sink] is handed to {!Session.resume}, so a resumed run streams
-    its new entries (there is no header line to re-emit). *)
+    session, resolves the branch point, appends a [model_change] entry, and
+    returns [(session, history, branch_correction)]. *)

@@ -1,10 +1,8 @@
 let ( let* ) = Result.bind
 let err fmt = Fmt.kstr (fun s -> Error s) fmt
 
-(* The dead end this message has to open up: the caller wants to continue, the
-   session has several tips, and only they can say which. So spell the branches
-   out as commands to paste rather than naming a listing to go read — doubly so
-   because a tip is often a tool result, which --list messages never shows. *)
+(* Print copy-pasteable [--parentId] commands per branch tip (tips may be tool
+   results that [--list messages] hides). *)
 let err_session_branches ~session_id ~path n =
   let tips =
     match Session_list.list_branches ~path () with Ok ts -> ts | Error _ -> []
@@ -43,10 +41,6 @@ let path_of ~cwd ~session_id =
   let dir = Session.dir_for ~root ~cwd in
   Session_read.file_for_session ~dir ~session_id
 
-(* Everything a resume decides before a byte is written, from one parse of the
-   file: which entry to continue from (the requested one, or the session's
-   single leaf), corrected to the nearest complete turn, and the history that
-   leads to it. *)
 let resolve ~cwd ~session_id ~parent_id =
   let* path = path_of ~cwd ~session_id in
   let* tree = Session_read.load path in
@@ -55,9 +49,6 @@ let resolve ~cwd ~session_id ~parent_id =
   let* history = Session_read.messages tree ~leaf () in
   Ok (path, leaf, branch_correction, history)
 
-(* The read-only half of [resume]: the same leaf selection and branch-point
-   correction, stopping short of reopening the file for appending. A leaf
-   correction is silent here because nothing is written to the branch. *)
 let load ~cwd ~session_id ~parent_id () =
   let* path, _, _, history = resolve ~cwd ~session_id ~parent_id in
   Ok (path, history)

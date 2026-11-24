@@ -1,8 +1,6 @@
-(* op - minimal one-shot agentic loop.
+(* One-shot agent loop and executable boundary.
 
-   Keep Eio-facing orchestration in this file: TLS construction, Stdenv
-   capability extraction, Eio-backed tools, and the agent loop wiring should be
-   visible at the executable boundary. *)
+   Keep Eio orchestration here: TLS, Stdenv capabilities, tools, and loop setup. *)
 
 let ( let* ) = Result.bind
 
@@ -108,10 +106,7 @@ let resolve_prompt ~(fail : string -> 'a) ~resuming ~prompt_file ~prompt =
 
 let warn msg = Fmt.epr "warning: %s@." msg
 
-(* Build the selected tool set. [nu] is constructed only when requested, and
-   brings its gate with it. A backend with no process support (eio_windows
-   raises [Failure] from [process_mgr]) drops the tool: op still runs, without
-   [nu]. *)
+(* Build requested tools; drop [nu] on platforms without Eio process support. *)
 let build_tools ~env ~profile ~tool_names ~depth =
   let nu =
     if not (List.mem "nu" tool_names) then None
@@ -149,12 +144,8 @@ let build_messages ~cwd ~prompt ~image_blocks ~prior_history ~tool_names =
   :: prior_history
   @ [ Op.Llm.user ~blocks:image_blocks prompt ]
 
-(* [resume] is a stderr trailer for [--json], whose stdout is one JSON object a
-   human is not reading. The human transcript already ends with the same line
-   in its footer. [--stream] has no use for it either: its result line carries
-   the ids, its reader is a program, and when that program renders the stream
-   (hop, through [op --render]) a stderr line lands in the middle of the
-   transcript. *)
+(* Emit a stderr resume hint for [--json] only; human mode includes it in the
+   footer and [--stream] carries ids in its result line. *)
 let close_session ~(mode : Cli.output) session =
   Option.iter
     (fun s ->
@@ -176,16 +167,13 @@ let warn_branch_correction = function
          %!"
         from_id to_id
 
-(* Colour is for a human at a terminal only: off down a pipe, off when NO_COLOR
-   asks, off for a terminal that cannot render it. *)
 let use_color () =
   Unix.isatty Unix.stdout
   && Sys.getenv_opt "NO_COLOR" = None
   && Sys.getenv_opt "TERM" <> Some "dumb"
 
-(* One renderer per run, built lazily so the machine modes never construct it.
-   It is shared by the entry sink and the footer: the tool calls it remembers
-   are what let a result name the file it read. *)
+(* Lazy renderer shared by entry sink and footer so tool results can name their
+   call arguments. *)
 let renderer =
   lazy
     (let cwd = try Some (Sys.getcwd ()) with Sys_error _ -> None in
@@ -205,8 +193,7 @@ let report_result ~(mode : Cli.output) ~session ~base ~window ~model
           Option.value ~default:"" (Op.Run_report.last_assistant_text history)
         in
         let u =
-          (* Base-scoped: a resumed run replays turns that carry the usage the
-             session recorded, and reporting those again would double-count. *)
+          (* Count only turns from this run; replayed history carries prior usage. *)
           Option.value
             (Op.Run_report.sum_usage ~base history)
             ~default:
@@ -231,8 +218,6 @@ let report_result ~(mode : Cli.output) ~session ~base ~window ~model
       List.iter print_endline (Op.Render.footer (Lazy.force renderer) envelope)
   | Cli.Stream | Cli.Json -> print_endline (Yojson.Safe.to_string envelope)
 
-(* Per-event sink: session logging, plus the one warning the session lines
-   cannot carry (repaired tool-call ids) on stderr. *)
 let build_emit ~log ~provider ~model =
   let log = log_event log provider model in
   fun event ->
@@ -245,9 +230,6 @@ let build_emit ~log ~provider ~model =
     | Op.Agent.Assistant_turn _ | Op.Agent.Tool_finished _ -> ());
     log event
 
-(* Open a fresh session, or resume/branch an existing one per the CLI flags.
-   Returns the session (if logging is possible), the prior history to replay,
-   and any leaf-correction to warn about. *)
 let session_for_run ?sink ?parent_session ~fail ~cwd ~provider ~model
     ~session_id ~parent_id () =
   match (session_id, parent_id) with
@@ -263,10 +245,8 @@ let session_for_run ?sink ?parent_session ~fail ~cwd ~provider ~model
           (Some session, history, branch_correction)
       | Error e -> fail e)
 
-(* Report a hard failure and exit 1. Human mode says it in prose on stderr —
-   stdout is the transcript, and half a transcript plus a JSON object is not a
-   thing to read; the machine modes keep the error envelope on stdout, tagged
-   under --stream where it shares the stream with the session entry lines. *)
+(* Hard failure: prose on stderr in human mode; JSON envelope on stdout in
+   machine modes. *)
 let fail_with (mode : Cli.output) ?hint msg =
   (match mode with
   | Cli.Human ->
@@ -278,10 +258,8 @@ let fail_with (mode : Cli.output) ?hint msg =
         (Op.Run_report.error ~typed:(mode = Cli.Stream) ~msg ?hint ()));
   exit 1
 
-(* What each session line does on its way to stdout. Under --stream it is teed
-   verbatim, byte-identical to the file's; under the default it is rendered.
-   Either way it is flushed per entry, so the run reads live. Absent under
-   --json, which reports the envelope alone. *)
+(* Flush each session line to stdout as written (raw JSON for --stream,
+   rendered for human). *)
 let stream_sink (mode : Cli.output) =
   match mode with
   | Cli.Stream ->
@@ -296,11 +274,8 @@ let stream_sink (mode : Cli.output) =
           flush stdout)
   | Cli.Json -> None
 
-(* The context cap: the run stops once the last turn's reported usage crosses
-   [contextLimit] of the model's [contextWindow]. Returns [None] — no cap, and
-   no [context] object in the envelope — when models.json does not give this
-   model a window, which is also the case for a --model override naming an
-   unlisted one. *)
+(* Stop between turns once reported usage reaches [contextLimit] of
+   [contextWindow], if configured for this model. *)
 let context_guard ~config ~provider ~model =
   match Op.Config.context_window_for provider ~model with
   | None -> (None, None)
@@ -315,9 +290,6 @@ let context_guard ~config ~provider ~model =
       in
       (Some window, Some over)
 
-(* The run's tail: report the outcome (one envelope, tagged when it shares
-   stdout with the streamed entry lines), print the stderr resume hint, close
-   the session, and exit with the classified code. *)
 let finish ~(mode : Cli.output) ~session ~base ~window ~model ~extra_metadata
     result =
   report_result ~mode ~session ~base ~window ~model ~extra_metadata result;
@@ -338,9 +310,8 @@ let run_with_context ~env ~mode ~cwd ~config ~provider ~api_key ~model ~tls
   let extra_metadata =
     Op.Run_report.branch_correction_metadata branch_correction
   in
-  (* The entries are produced whether or not they can be saved: a run whose
-     log could not be opened still prints its transcript. [session] stays the
-     saved one, which is what the envelope and the resume hint may name. *)
+  (* Emit entries even if session logging failed; only [session] is reported in
+     envelopes and resume hints. *)
   let log =
     match session with
     | Some s -> s
@@ -355,7 +326,7 @@ let run_with_context ~env ~mode ~cwd ~config ~provider ~api_key ~model ~tls
   in
   let gate = Op.Gate.v ?nu:nu_gate ~cwd () in
   Op.Session.append_user log ~blocks:image_blocks ~text:prompt ();
-  (* The prompt reflects the tools actually built (nu may have been dropped). *)
+  (* Reflect the tools actually built; [nu] may have been dropped. *)
   let tool_names = List.map (fun (t : Op.Tool.t) -> t.name) tools in
   let messages =
     build_messages ~cwd ~prompt ~image_blocks ~prior_history ~tool_names
@@ -368,11 +339,8 @@ let run_with_context ~env ~mode ~cwd ~config ~provider ~api_key ~model ~tls
     ~model:(provider.Op.Config.name ^ "/" ^ model)
     ~extra_metadata result
 
-(* The handoff document on stdout: raw markdown by default, so it pipes straight
-   back into op, or the full record under --json for hop and other callers that
-   also want the file paths as data. This is the one place op's
-   default stdout is not JSON — in handoff mode the prompt *is* the payload,
-   just as --list's default is a table. *)
+(* Raw markdown by default for piping back into op; JSON record with file lists
+   under --json. *)
 let report_handoff ~json ~goal ~session_id ~model ~files document =
   if not json then print_string (Op.Render.scrub_string document)
   else
@@ -395,14 +363,11 @@ let report_handoff ~json ~goal ~session_id ~model ~files document =
               ("isError", `Bool false);
             ]))
 
-(* --handoff: read a session and ask a model to write the opening prompt for a
-   fresh one. Deliberately not the agent loop — no tools, no gate, one call —
-   and the source session is only read, never appended to. *)
+(* Single tool-less call to summarize a session; source session is read-only. *)
 let run_handoff ~env ~(mode : Cli.output) ~cwd ~provider ~api_key ~model ~tls
     ~session_id ~parent_id ~goal =
-  (* Fail in the run's own mode: a human-mode handoff is routinely piped into
-     the next op as its prompt, so an error must go to stderr as prose, never
-     to stdout as a JSON object that would be read as that prompt. *)
+  (* Keep errors off stdout in human mode so a piped handoff never feeds an
+     error as the next prompt. *)
   let fail msg = fail_with mode msg in
   let json = mode = Cli.Json in
   let history =
@@ -428,11 +393,8 @@ let run_handoff ~env ~(mode : Cli.output) ~cwd ~provider ~api_key ~model ~tls
         ~files
         (Op.Handoff.assemble ~summary:turn.text ~files)
 
-(* --handoff picks its own model: the document seeds the next thread, so it is
-   worth the strongest model configured, and it must hold the whole session. An
-   explicit --model still wins. Config is re-read here rather than threaded
-   through, so [load_context] stays the single place that reports config
-   errors. *)
+(* Use [handoffModel] unless --model overrides it; re-read config so
+   [load_context] owns config errors. *)
 let handoff_model_spec model_spec =
   match model_spec with
   | Some _ -> model_spec
@@ -441,11 +403,8 @@ let handoff_model_spec model_spec =
       | Ok config -> Op.Config.handoff_model config
       | Error _ -> None)
 
-(* The run's tool set: --tools wins, then the profile's [tools] list, then
-   every known tool (a named profile without a [tools] list). With no profile
-   at all the empty profile's list is [[]], a chat run. --tools was validated by its cmdliner conv; the profile's
-   list is hand-edited JSON and is validated here, so a typo fails the run
-   rather than silently granting the full set. *)
+(* Tool precedence: --tools > profile.tools > all known tools. Validate
+   profile.tools here since it comes from user JSON. *)
 let resolve_tool_names ~tools ~(profile : Op.Config.nu_profile) =
   match (tools, profile.tools) with
   | Some names, _ -> Ok names
@@ -455,14 +414,13 @@ let resolve_tool_names ~tools ~(profile : Op.Config.nu_profile) =
         (fun msg -> Fmt.str "profile '%s': %s" profile.name msg)
         (Op.Tools.validate names)
 
-(* Prepend the --context file blocks to the user's prompt. *)
 let expand_prompt ~fail ~context prompt =
   let files =
     List.map
       (fun path ->
         match Op.Util.read_file path with
         | Ok contents -> (path, contents)
-        (* [read_file]'s message already names the path. *)
+        (* [read_file] already includes the path. *)
         | Error msg -> Fmt.kstr fail "--context: %s" msg)
       context
   in
@@ -471,14 +429,10 @@ let expand_prompt ~fail ~context prompt =
 let run_prompt ~env ~mode ~session_id ~parent_id ~from_session ~model_spec
     ~prompt_file ~max_steps ~tools ~profile ~images ~context ~prompt =
   let fail msg = fail_with mode msg in
-  (* Nested-op handshake: a nested op (spawned from inside a nu script) inherits
-     the nu toolbox PATH plus the OP_HOST_PATH/OP_DEPTH markers. Restore the real
-     PATH so this op's own tools and toolbox resolve, and refuse to run past a
-     bounded recursion depth so op->nu->op cannot run away. *)
+  (* Nested-op handshake: restore real PATH from OP_HOST_PATH and bound
+     recursion via OP_DEPTH. *)
   Option.iter (Unix.putenv "PATH") (Sys.getenv_opt "OP_HOST_PATH");
-  (* Absent means a top-level run; present but not a small non-negative
-     integer means something rewrote the marker, so refuse rather than read
-     it as depth 0. *)
+  (* Reject malformed OP_DEPTH rather than defaulting to 0. *)
   let depth =
     match Sys.getenv_opt "OP_DEPTH" with
     | None -> 0
@@ -491,17 +445,13 @@ let run_prompt ~env ~mode ~session_id ~parent_id ~from_session ~model_spec
     Fmt.kstr fail "op recursion too deep (OP_DEPTH=%d > 2); refusing to run"
       depth;
   let fail_app e = fail_with mode ?hint:e.hint e.msg in
-  (* Resolve the working directory once so every downstream consumer — session
-     dir, resume, and the system prompt — agrees on it. *)
+  (* Resolve cwd once for session dir, resume, and system prompt; catch
+     removed-cwd Sys_error to keep the --json error contract. *)
   let cwd =
-    (* [Sys.getcwd] raises if the working directory was removed under us; keep
-       the --json error contract instead of leaking a backtrace. *)
     try Sys.getcwd ()
     with Sys_error msg ->
       Fmt.kstr fail "cannot determine working directory: %s" msg
   in
-  (* --fromSession records provenance on a *fresh* session: the new thread
-     continues the old one's work with a clean context (see --handoff). *)
   let parent_session =
     Option.map
       (fun id ->
@@ -533,9 +483,8 @@ let run_prompt ~env ~mode ~session_id ~parent_id ~from_session ~model_spec
                 ~tls ~session_id ~parent_id ~parent_session ~max_steps
                 ~tool_names ~depth ~profile ~prompt ~image_blocks))
 
-(* The --handoff entry point. Its goal comes from the PROMPT argument or
-   --prompt only: an absent goal is legitimate ("carry on from where this left
-   off"), so it must not fall through to reading stdin, which would block. *)
+(* Goal comes from PROMPT or --prompt only; an empty goal is valid and must not
+   block on stdin. *)
 let handoff_cmd ~env ~(mode : Cli.output) ~session_id ~parent_id ~model_spec
     ~prompt_file ~prompt =
   let fail msg = fail_with mode msg in
@@ -559,10 +508,8 @@ let handoff_cmd ~env ~(mode : Cli.output) ~session_id ~parent_id ~model_spec
       run_handoff ~env ~mode ~cwd ~provider ~api_key ~model ~tls ~session_id
         ~parent_id ~goal
 
-(* --render: replay a session through the transcript renderer. The source is a
-   session of this directory, a file, or stdin (a file's lines, or a live
-   --stream). Printed and flushed line by line, so a piped stream reads live.
-   User messages are echoed: unlike a run, nobody just typed them here. *)
+(* Replay a session file or live --stream through the transcript renderer,
+   echoing user messages. *)
 let render_cmd ~session_id ~file =
   let fail msg = fail_with Cli.Human msg in
   let cwd = try Some (Sys.getcwd ()) with Sys_error _ -> None in

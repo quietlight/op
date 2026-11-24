@@ -1,15 +1,8 @@
-(* Tests for Op.Prompt — pure prompt-source resolution. *)
-
 open Op.Prompt
 
-(* True if [needle] occurs in [hay]. *)
 let contains ~needle hay = Op.Util.substring ~start:0 ~needle hay <> None
-
-(* The returned prompt when [Ok], else [None]. *)
 let ok_of = function Ok s -> Some s | Error _ -> None
 
-(* A short label for an error variant, so error cases assert on the specific
-   constructor without exposing internal equality. *)
 let err_label = function
   | No_source -> "no_source"
   | Empty File -> "empty_file"
@@ -18,8 +11,6 @@ let err_label = function
   | Ambiguous -> "ambiguous"
 
 let result_label = function Ok _ -> "ok" | Error e -> err_label e
-
-(* --- resolve: --prompt FILE wins --- *)
 
 let test_file_wins_over_arg_and_stdin () =
   Alcotest.(check (option string))
@@ -39,13 +30,9 @@ let test_file_content_is_trimmed () =
     (ok_of (resolve ~file:(Some "  hi\n") ~arg:None ~stdin:None))
 
 let test_empty_file_is_error_even_with_arg () =
-  (* --prompt overrides PROMPT, so an empty file is an error, not a fallback
-     to the argument. *)
   Alcotest.(check string)
     "empty file errors even when arg is present" "empty_file"
     (result_label (resolve ~file:(Some "") ~arg:(Some "arg") ~stdin:None))
-
-(* --- resolve: PROMPT argument --- *)
 
 let test_arg_alone () =
   Alcotest.(check (option string))
@@ -62,8 +49,6 @@ let test_empty_arg_alone_is_error () =
     "whitespace arg is empty" "empty_arg"
     (result_label (resolve ~file:None ~arg:(Some "  ") ~stdin:None))
 
-(* --- resolve: stdin --- *)
-
 let test_stdin_alone () =
   Alcotest.(check (option string))
     "stdin used when no file or arg" (Some "s")
@@ -79,15 +64,12 @@ let test_empty_stdin_alone_is_error () =
     "whitespace stdin is empty" "empty_stdin"
     (result_label (resolve ~file:None ~arg:None ~stdin:(Some "\t\n")))
 
-(* --- resolve: arg + stdin interaction (the ambiguity fix) --- *)
-
 let test_arg_and_nonempty_stdin_is_ambiguous () =
   Alcotest.(check string)
     "arg + non-empty stdin is ambiguous" "ambiguous"
     (result_label (resolve ~file:None ~arg:(Some "a") ~stdin:(Some "s")))
 
 let test_arg_and_empty_stdin_uses_arg () =
-  (* An empty stdin (e.g. /dev/null) is not a real prompt, so the arg wins. *)
   Alcotest.(check (option string))
     "arg + empty stdin uses arg" (Some "a")
     (ok_of (resolve ~file:None ~arg:(Some "a") ~stdin:(Some "")))
@@ -103,20 +85,14 @@ let test_empty_arg_and_nonempty_stdin_uses_stdin () =
     (ok_of (resolve ~file:None ~arg:(Some "") ~stdin:(Some "s")))
 
 let test_both_empty_names_arg () =
-  (* Both provided but empty: not ambiguous (no conflict), just empty. The
-     higher-precedence source (arg) is named. *)
   Alcotest.(check string)
     "both empty is empty_arg" "empty_arg"
     (result_label (resolve ~file:None ~arg:(Some "") ~stdin:(Some "")))
-
-(* --- resolve: nothing provided --- *)
 
 let test_nothing_is_no_source () =
   Alcotest.(check string)
     "no sources is no_source" "no_source"
     (result_label (resolve ~file:None ~arg:None ~stdin:None))
-
-(* --- message --- *)
 
 let test_message_no_source_keeps_usage () =
   let m = message ~file_path:None No_source in
@@ -124,8 +100,6 @@ let test_message_no_source_keeps_usage () =
   Alcotest.(check bool) "mentions --help" true (contains ~needle:"op --help" m)
 
 let test_message_no_source_resuming_names_session () =
-  (* When a resume was requested but no prompt given, the message points at the
-     --sessionId form rather than the bare usage line. *)
   let m = message ~file_path:None ~resuming:true No_source in
   Alcotest.(check bool)
     "names --sessionId" true
@@ -135,7 +109,6 @@ let test_message_no_source_resuming_names_session () =
     (contains ~needle:"prompt" m)
 
 let test_message_no_source_not_resuming_omits_session () =
-  (* The default (non-resume) No_source message keeps the bare usage line. *)
   let m = message ~file_path:None No_source in
   Alcotest.(check bool)
     "no --sessionId in bare usage" false

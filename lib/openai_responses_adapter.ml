@@ -1,25 +1,5 @@
-(* OpenAI Responses API adapter (/responses) with native function calling.
-
-   The Responses API is not chat-completions with a different URL: history is an
-   [input] array of typed items rather than a [messages] array, tool specs are
-   flat (not nested under "function"), tool calls/results are their own items,
-   and the response is a top-level [output] array. All of that wire shape is
-   confined to this module; the agent loop only ever sees [Llm] types.
-
-   op resends the full history every turn, so requests are stateless
-   ([store:false]) and op's own tool-call ids are reused directly as the
-   Responses [call_id], avoiding the call_id/item_id pairing scheme that
-   stateful, reasoning-replaying clients need. Reasoning is captured for display
-   but never replayed (its [signature] is [None]). *)
-
 let ( let* ) = Result.bind
 
-(* ------------------------------------------------------------------ *)
-(* Tool schema serialization                                          *)
-(* ------------------------------------------------------------------ *)
-
-(* Responses tools are flat: { type: "function", name, description, parameters }
-   — unlike chat-completions, which nests these under a "function" key. *)
 let tool_spec (t : Tool.t) : Yojson.Safe.t =
   `Assoc
     [
@@ -31,14 +11,6 @@ let tool_spec (t : Tool.t) : Yojson.Safe.t =
 
 let tool_specs tools = List.map tool_spec tools
 
-(* ------------------------------------------------------------------ *)
-(* Input item serialization                                           *)
-(* ------------------------------------------------------------------ *)
-
-(* Map one neutral message to its Responses input item(s). An assistant turn
-   expands to a message item (when it has text) plus one function_call item per
-   tool call, so this returns a list. *)
-(* Reasoning is intentionally not replayed (see module note). *)
 let assistant_input_items text (tool_calls : Llm.tool_call list) =
   let message_items =
     if text = "" then []
@@ -102,7 +74,7 @@ let input_items : Llm.message -> Yojson.Safe.t list = function
       [ `Assoc [ ("role", `String "user"); ("content", `List parts) ] ]
   | Assistant { text; tool_calls; _ } -> assistant_input_items text tool_calls
   | Tool { id; content; is_error; _ } ->
-      (* function_call_output carries no error flag; prefix the content. *)
+      (* [function_call_output] has no error flag. *)
       let content = if is_error then "Error: " ^ content else content in
       [
         `Assoc
@@ -113,23 +85,17 @@ let input_items : Llm.message -> Yojson.Safe.t list = function
           ];
       ]
 
-(* ------------------------------------------------------------------ *)
-(* Request body                                                       *)
-(* ------------------------------------------------------------------ *)
-
 let build_body ?max_tokens ~model ~tools ~messages () =
   let input = List.concat_map input_items messages in
   let fields =
     [
       ("model", `String model);
       ("input", `List input);
-      (* op replays full history every turn; never persist server-side. *)
+      (* Stateless: full history is resent every turn. *)
       ("store", `Bool false);
     ]
   in
   let fields =
-    (* Only advertised when there are some: strict endpoints reject an empty
-       tools array, and tool_choice without tools. *)
     match tools with
     | [] -> fields
     | _ ->
@@ -145,11 +111,6 @@ let build_body ?max_tokens ~model ~tools ~messages () =
   in
   Yojson.Safe.to_string (`Assoc fields)
 
-(* ------------------------------------------------------------------ *)
-(* Response parsing                                                   *)
-(* ------------------------------------------------------------------ *)
-
-(* Concatenate the text of every output_text part in a "message" item. *)
 let message_text item =
   let open Yojson.Safe.Util in
   match member "content" item with
@@ -162,8 +123,6 @@ let message_text item =
       |> String.concat ""
   | _ -> ""
 
-(* A "function_call" item: call_id is reused as the Llm tool-call id, and
-   arguments arrives as a JSON-encoded string that must be parsed. *)
 let function_call item : Llm.tool_call option =
   let open Yojson.Safe.Util in
   match (member "call_id" item, member "name" item) with
@@ -179,8 +138,6 @@ let function_call item : Llm.tool_call option =
       Some { Llm.id; name; arguments }
   | _ -> None
 
-(* Reasoning item: join the summary parts (or content parts) into one string.
-   Captured for display only; signature [None] marks it as never replayed. *)
 let reasoning_text item =
   let open Yojson.Safe.Util in
   let parts_text field =
@@ -202,17 +159,12 @@ let parse_usage json =
   | u -> (
       match (member "input_tokens" u, member "output_tokens" u) with
       | `Int total, `Int output ->
-          (* OpenAI caching is automatic; the Responses API nests the cache-read
-             count under input_tokens_details (no separate write count). Guard
-             the nested lookup: [member] raises if the details object is absent
-             (returns `Null) rather than an object. *)
           let cached =
             match member "input_tokens_details" u with
             | `Assoc _ as d -> (
                 match member "cached_tokens" d with `Int n -> n | _ -> 0)
             | _ -> 0
           in
-          (* input_tokens already counts the cached tokens. *)
           Some (Llm.usage_uncached ~total ~cached ~output ~cache_creation:0)
       | _ -> None)
 
@@ -248,10 +200,6 @@ let parse_response json_str : (Llm.assistant_turn, Transport.error) result =
   in
   let usage = parse_usage json in
   Ok { Llm.text; thinking; tool_calls; usage }
-
-(* ------------------------------------------------------------------ *)
-(* Call                                                               *)
-(* ------------------------------------------------------------------ *)
 
 let call ?max_tokens ~post ~base_url ~api_key ~model ~tools ~messages () =
   let base = base_url |> String.trim |> Transport.strip_trailing_slash in

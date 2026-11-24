@@ -1,5 +1,3 @@
-(* Shared helpers for the op test suite. *)
-
 let contains haystack needle =
   let n = String.length haystack and m = String.length needle in
   let rec loop i =

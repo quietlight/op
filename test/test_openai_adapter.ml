@@ -1,4 +1,3 @@
-(* Section-local helpers from agent tests *)
 let turn ?(text = "") ?(thinking = None) ?(usage = None) tool_calls :
     Op.Llm.assistant_turn =
   { text; thinking; tool_calls; usage }
@@ -67,7 +66,6 @@ let test_openai_serializes_messages () =
     "roles"
     [ "system"; "user"; "assistant"; "tool" ]
     (List.map (fun m -> member "role" m |> to_string) msgs);
-  (* Assistant message has tool_calls *)
   let assistant_msg = List.nth msgs 2 in
   let tool_calls = member "tool_calls" assistant_msg |> to_list in
   Alcotest.(check int) "one tool call" 1 (List.length tool_calls);
@@ -77,7 +75,6 @@ let test_openai_serializes_messages () =
   Alcotest.(check string)
     "tc name" "bash"
     (member "function" tc |> member "name" |> to_string);
-  (* Tool result message *)
   let tool_msg = List.nth msgs 3 in
   Alcotest.(check string)
     "tool_call_id" "call_1"
@@ -94,9 +91,6 @@ let test_openai_parse_tool_calls () =
   | Ok turn -> (
       Alcotest.(check string) "text" "Let me look." turn.text;
       (match turn.usage with
-      (* prompt_tokens (56) is the whole prompt and includes cached_tokens
-         (40); Llm.usage keeps the fields disjoint, so input is the 16
-         uncached tokens and input + cache_read recovers the wire total. *)
       | Some { input; output; cache_read; _ } ->
           Alcotest.(check int) "uncached input" 16 input;
           Alcotest.(check int) "usage output" 78 output;
@@ -114,9 +108,6 @@ let test_openai_parse_tool_calls () =
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_openai_usage_without_details () =
-  (* Kimi-style response: tool_calls present, empty content, and a usage object
-     with no prompt_tokens_details. Must parse cleanly with cache_read = 0
-     rather than raising on the absent nested object. *)
   let json =
     {|{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"bash_0","type":"function","function":{"name":"bash","arguments":"{\"command\":\"uname -s\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1499,"completion_tokens":92}}|}
   in
@@ -138,15 +129,12 @@ let test_openai_parse_reasoning_content () =
   | Ok turn -> (
       match turn.thinking with
       | Some (Reasoning { text; signature }) ->
-          (* display-only: never replayed, so the signature is [None] *)
           Alcotest.(check (option string)) "signature" None signature;
           Alcotest.(check string) "text" "because reasons" text
       | _ -> Alcotest.fail "expected reasoning from reasoning_content")
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_openai_reasoning_precedence () =
-  (* Both "reasoning" and "reasoning_text" present: "reasoning" wins because it
-     comes first in the probe order. *)
   let json =
     {|{"choices":[{"message":{"role":"assistant","content":"ok","reasoning":"first","reasoning_text":"second"},"finish_reason":"stop"}]}|}
   in
@@ -160,9 +148,6 @@ let test_openai_reasoning_precedence () =
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_openai_array_thinking () =
-  (* Mistral's magistral models return [content] as an array of typed chunks: a
-     "thinking" chunk (whose [thinking] is itself an array of text parts)
-     followed by "text" chunks. Both must be recovered, not silently dropped. *)
   let json =
     {|{"choices":[{"message":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"step one"},{"type":"text","text":"step two"}]},{"type":"text","text":"the visible answer"}]},"finish_reason":"stop"}]}|}
   in
@@ -177,8 +162,6 @@ let test_openai_array_thinking () =
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_openai_array_text () =
-  (* Array content with only text chunks (no reasoning): concatenate the text,
-     no thinking. *)
   let json =
     {|{"choices":[{"message":{"role":"assistant","content":[{"type":"text","text":"hello "},{"type":"text","text":"world"}]},"finish_reason":"stop"}]}|}
   in
@@ -189,9 +172,6 @@ let test_openai_array_text () =
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_openai_thinking_not_replayed () =
-  (* Reasoning is display-only on this adapter: an assistant turn carrying
-     thinking must not echo it back on the wire (chat-completions providers
-     don't want prior reasoning resent). *)
   let messages =
     [
       Op.Llm.Assistant
@@ -248,8 +228,6 @@ let test_openai_think_no_open () =
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_openai_reasoning_over_tags () =
-  (* Providers may duplicate field reasoning as inline tags (MiniMax-M2.7):
-     the field wins as the reasoning, and the tags still leave the text. *)
   let json =
     {|{"choices":[{"message":{"role":"assistant","content":"<think>inline</think>\n\nvisible","reasoning_content":"field"},"finish_reason":"stop"}]}|}
   in
@@ -258,8 +236,6 @@ let test_openai_reasoning_over_tags () =
       Alcotest.(check string) "text" "visible" turn.text;
       match turn.thinking with
       | Some (Reasoning { text; signature }) ->
-          (* the field still wins as the reasoning; signature is [None] because
-             this adapter never replays reasoning *)
           Alcotest.(check (option string)) "signature" None signature;
           Alcotest.(check string) "text" "field" text
       | _ -> Alcotest.fail "expected thinking from field")
@@ -321,8 +297,6 @@ let test_openai_multiple_tool_calls () =
   | Error e -> Alcotest.fail (Op.Transport.pp_error e)
 
 let test_openai_error_prefix () =
-  (* Tool errors are encoded as content with an "Error: " prefix, not an
-     is_error field — the OpenAI spec has no such field. *)
   let messages =
     [
       Op.Llm.System "sys";
@@ -353,20 +327,16 @@ let test_openai_error_prefix () =
   Alcotest.(check string)
     "error content prefixed" "Error: no such file"
     (member "content" tool_msg |> to_string);
-  (* No is_error field in the wire format *)
   Alcotest.(check bool)
     "no is_error field" true
     (match member "is_error" tool_msg with `Null -> true | _ -> false)
 
 let test_openai_parse_malformed_choice () =
-  (* A choice missing the "message" object should return an error, not crash *)
   let json = {|{"choices":[{"finish_reason":"stop"}]}|} in
   match Op.Openai_adapter.For_testing.parse_response json with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected error for malformed response"
 
-(* A non-empty tool set is advertised with tool_choice auto; the empty case
-   (both fields omitted) is covered in test_openai_serializes_messages. *)
 let test_openai_tools_advertised () =
   let tool : Op.Tool.t =
     {
